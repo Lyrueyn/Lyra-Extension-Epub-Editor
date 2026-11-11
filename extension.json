@@ -1,7 +1,7 @@
 {
   "id": "epub-editor",
   "name": "EPUB 编辑器",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "index.html",
   "description": "EPUB 整书编辑器：解包编辑 XHTML/CSS/OPF，实时预览，保存回 EPUB；可独立使用，也可被 EPUB 阅读器嵌入。",
   "kind": "editor-plugin",

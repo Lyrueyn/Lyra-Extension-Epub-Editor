@@ -303,7 +303,7 @@
           savePending.set(saveId, { resolve, reject });
           setTimeout(() => { if (savePending.has(saveId)) { savePending.delete(saveId); reject(new Error("阅读器保存响应超时")); } }, 15000);
         });
-        window.parent.postMessage({ type: "epub-editor-save", saveId: saveId, name: state.name, data: b64 }, "*");
+        window.parent.postMessage({ type: "epub-editor-save", saveId: saveId, name: state.name, data: bytes.buffer }, "*");
         await ack;
       } else {
         const payload = { data: b64 };
@@ -333,7 +333,18 @@
   window.addEventListener("message", (event) => {
     const d = event.data || {};
     if (d.type === "epub-editor-load" && d.data) {
-      loadBytes(base64ToBytes(d.data), d.name, "").catch((e) => status("加载失败：" + e.message, true));
+      try {
+        const bytes = d.data instanceof ArrayBuffer ? new Uint8Array(d.data) : d.data instanceof Uint8Array ? d.data : base64ToBytes(d.data);
+        loadBytes(bytes, d.name, "").then(() => {
+          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: true }, "*"); } catch { }
+        }).catch((e) => {
+          status("加载失败：" + (e && e.message ? e.message : e), true);
+          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: false, error: String(e && e.message || e) }, "*"); } catch { }
+        });
+      } catch (e) {
+        status("加载失败：" + (e && e.message ? e.message : e), true);
+        try { window.parent.postMessage({ type: "epub-editor-loaded", ok: false, error: String(e && e.message || e) }, "*"); } catch { }
+      }
       return;
     }
     if (d.type === "epub-editor-saved") {
