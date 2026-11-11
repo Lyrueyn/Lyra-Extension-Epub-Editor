@@ -1,0 +1,37 @@
+{
+  "id": "epub-editor",
+  "name": "EPUB 编辑器",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "description": "EPUB 整书编辑器：解包编辑 XHTML/CSS/OPF，实时预览，保存回 EPUB；可独立使用，也可被 EPUB 阅读器嵌入。",
+  "kind": "editor-plugin",
+  "editor": {
+    "id": "epub",
+    "name": "EPUB",
+    "description": "EPUB 整书源码与预览",
+    "glyph": "E736",
+    "order": 30
+  },
+  "fileTypes": [
+    ".epub"
+  ],
+  "host": {
+    "innerName": "editor.html",
+    "fileParam": "file",
+    "keepMtime": false
+  },
+  "library": {
+    "sidebar": false,
+    "navLabel": "EPUB-Editor",
+    "glyph": "E736",
+    "title": "EPUB 编辑器层",
+    "description": "编辑 EPUB 内部 XHTML/CSS。",
+    "openLabel": "打开",
+    "addLabel": "",
+    "authorFallback": "EPUB",
+    "cover": "none",
+    "order": 36,
+    "metadata": ""
+  },
+  "license": "GPL-3.0-only"
+}

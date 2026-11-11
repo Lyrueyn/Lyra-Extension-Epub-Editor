@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPUB 编辑器</title>
+<link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header id="topbar">
+  <div class="brand">EPUB</div>
+  <button id="saveBtn" class="primary" title="保存 (Ctrl+S)" disabled>保存</button>
+  <button id="reloadBtn" title="重新加载">重新加载</button>
+  <span id="bookName" class="book-name">未打开 EPUB</span>
+  <span id="dirtyBadge" class="dirty" hidden>未保存</span>
+  <span id="status" class="status">就绪</span>
+</header>
+<div id="main">
+  <aside id="sidebar">
+    <div class="side-head"><span>EPUB 文件</span><span id="fileCount"></span></div>
+    <input id="filter" type="text" placeholder="筛选文件…" spellcheck="false">
+    <div id="tree" class="tree"></div>
+  </aside>
+  <section id="sourcePane">
+    <div class="pane-head"><span id="currentFile">未选择文件</span><span id="fileMode" class="muted"></span></div>
+    <textarea id="code"></textarea>
+  </section>
+  <section id="previewPane">
+    <div class="pane-head"><span>预览</span><span id="previewInfo" class="muted"></span></div>
+    <iframe id="preview" sandbox="allow-scripts allow-same-origin"></iframe>
+  </section>
+</div>
+<div id="empty" class="empty" hidden><div>把 EPUB 拖到这里，或从阅读器打开</div></div>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/codemirror/codemirror.min.js"></script>
+<script src="vendor/codemirror/mode/xml/xml.min.js"></script>
+<script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
+<script src="vendor/codemirror/mode/css/css.min.js"></script>
+<script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
+<script src="app.js"></script>
+</body></html>
