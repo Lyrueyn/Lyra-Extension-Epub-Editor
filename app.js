@@ -12,7 +12,7 @@
   const state = {
     zip: null, bytes: null, name: "book.epub", path: paramsPath,
     current: "", currentMode: "text", dirty: new Set(), loading: false,
-    previewToken: 0, blobCache: new Map(), treeFilter: "", saveSeq: 0,
+    previewToken: 0, blobCache: new Map(), treeFilter: "", saveSeq: 0, loadToken: "", loadPoller: 0,
   };
   let cm = null;
 
@@ -260,6 +260,7 @@
     state.bytes = bytes;
     state.name = name || state.name;
     state.path = path || state.path;
+    clearInterval(state.loadPoller);
     state.dirty.clear(); state.current = "";
     state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
     state.blobCache.clear();
@@ -334,12 +335,14 @@
     const d = event.data || {};
     if (d.type === "epub-editor-load" && d.data) {
       try {
+        state.loadToken = d.token || "";
         const bytes = d.data instanceof ArrayBuffer ? new Uint8Array(d.data) : d.data instanceof Uint8Array ? d.data : base64ToBytes(d.data);
         loadBytes(bytes, d.name, "").then(() => {
-          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: true }, "*"); } catch { }
+          clearInterval(state.loadPoller);
+          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: true, token: state.loadToken }, "*"); } catch { }
         }).catch((e) => {
           status("加载失败：" + (e && e.message ? e.message : e), true);
-          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: false, error: String(e && e.message || e) }, "*"); } catch { }
+          try { window.parent.postMessage({ type: "epub-editor-loaded", ok: false, token: state.loadToken, error: String(e && e.message || e) }, "*"); } catch { }
         });
       } catch (e) {
         status("加载失败：" + (e && e.message ? e.message : e), true);
@@ -391,6 +394,11 @@
     if (EMBEDDED) {
       setEmpty(true, "等待阅读器发送 EPUB…");
       try { window.parent.postMessage({ type: "epub-editor-ready" }, "*"); } catch { }
+      clearInterval(state.loadPoller);
+      state.loadPoller = setInterval(() => {
+        if (state.zip) { clearInterval(state.loadPoller); return; }
+        try { window.parent.postMessage({ type: "epub-editor-need-data" }, "*"); } catch { }
+      }, 1500);
     } else {
       loadFromHost();
     }
