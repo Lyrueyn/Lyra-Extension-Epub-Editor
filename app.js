@@ -601,6 +601,13 @@
 
   function bind() {
     $("saveBtn").addEventListener("click", () => saveBook());
+    if (EMBEDDED) {
+      $("backBtn").hidden = false;
+      $("backBtn").addEventListener("click", () => {
+        if (state.dirty.size && !confirm("有未保存修改，返回阅读会丢失这些修改，确定？")) return;
+        try { window.parent.postMessage({ type: "epub-editor-close" }, "*"); } catch { }
+      });
+    }
     $("filter").addEventListener("input", () => { state.treeFilter = String($("filter").value || "").trim().toLowerCase(); renderTree(); });
     $("newChapterBtn").addEventListener("click", () => createChapter().catch((e) => status(e.message, true)));
     $("findBtn").addEventListener("click", () => openFind());
@@ -621,7 +628,13 @@
       if (event.key === "Escape" && !$("findBar").hidden) closeFind();
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
-    document.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); } });
+    document.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
+      if (EMBEDDED && event.key === "Escape" && $("findBar").hidden) {
+        if (state.dirty.size && !confirm("有未保存修改，返回阅读会丢失这些修改，确定？")) return;
+        try { window.parent.postMessage({ type: "epub-editor-close" }, "*"); } catch { }
+      }
+    });
     window.addEventListener("beforeunload", (event) => { if (state.dirty.size) { event.preventDefault(); event.returnValue = ""; } });
     const empty = $("empty");
     const input = document.createElement("input"); input.type = "file"; input.accept = ".epub"; input.hidden = true;
