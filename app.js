@@ -17,6 +17,14 @@
     deletions: new Set(), opfPath: "",
   };
   let cm = null;
+  const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
+  function applyTheme(name) {
+    const theme = THEMES.includes(name) ? name : "lyra";
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem("lyra.epubEditor.theme", theme); } catch { }
+    const sel = $("themeSelect");
+    if (sel) sel.value = theme;
+  }
 
   function status(text, error) {
     const el = $("status");
@@ -600,6 +608,8 @@
   }
 
   function bind() {
+    $("themeSelect").addEventListener("change", () => applyTheme($("themeSelect").value));
+    try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());
     if (EMBEDDED) {
       $("backBtn").hidden = false;
