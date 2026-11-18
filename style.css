@@ -166,3 +166,43 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .font-tools button:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 #fontLabel{color:var(--muted);font:10px/1 Consolas,monospace;min-width:20px;text-align:center}
 @media(max-width:1180px){.font-tools{display:none}.preview-select{max-width:70px}}
+
+/* ===== 保存前检查 ===== */
+.validate-overlay{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+.validate-overlay[hidden]{display:none !important}
+.validate-card{width:min(680px,100%);max-height:min(620px,80vh);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.validate-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.validate-count{margin-left:auto;color:var(--muted);font:10px/1 Consolas,monospace;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:3px 8px}
+.validate-list{overflow:auto;padding:8px 12px;flex:1;min-height:120px}
+.validate-row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start;padding:7px 4px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);font-size:12px}
+.validate-row:last-child{border-bottom:0}
+.validate-row .sev{text-align:center;font-weight:700}
+.validate-row.error .sev{color:#ff6b86}
+.validate-row.warn .sev{color:#ffca7a}
+.validate-row .msg{color:var(--text);line-height:1.55;overflow-wrap:anywhere}
+.validate-row .file{display:block;color:var(--muted);font:10px/1.5 Consolas,monospace;margin-top:2px}
+.validate-empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+.validate-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--bar)}
+.validate-actions button{height:30px;padding:0 14px;border-radius:7px;font-size:12px}
+.validate-actions .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}
+
+/* ===== 章节与目录 ===== */
+.outline-overlay{position:fixed;inset:0;z-index:290;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+.outline-overlay[hidden]{display:none !important}
+.outline-card{width:min(760px,100%);max-height:min(680px,86vh);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.outline-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.outline-meta{margin-left:auto;color:var(--muted);font:10px/1 Consolas,monospace;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:3px 8px}
+.outline-hint{padding:9px 16px;color:var(--muted);font-size:11px;border-bottom:1px solid var(--line);background:var(--bar)}
+.outline-list{overflow:auto;padding:8px 10px;flex:1;min-height:120px}
+.outline-row{display:grid;grid-template-columns:22px 22px minmax(0,1fr) minmax(120px,.65fr);gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--panel-2);cursor:grab}
+.outline-row.dragging{opacity:.45}
+.outline-row.drag-over{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent)}
+.outline-handle{color:var(--muted);font:12px/1 Consolas,monospace;text-align:center;user-select:none}
+.outline-row input{border:1px solid transparent;background:transparent;color:var(--text);font:12.5px/1.5 system-ui;padding:3px 5px;border-radius:5px;outline:none;min-width:0}
+.outline-row input:hover{border-color:var(--border)}
+.outline-row input:focus{background:var(--bg-deep);border-color:var(--accent)}
+.outline-file{color:var(--muted);font:10px/1.5 Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:4px}
+.outline-empty{padding:20px;text-align:center;color:var(--muted);font-size:12px}
+.outline-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--bar)}
+.outline-actions button{height:30px;padding:0 14px;border-radius:7px;font-size:12px}
+.outline-actions .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}

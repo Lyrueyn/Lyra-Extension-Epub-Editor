@@ -15,7 +15,8 @@
     previewToken: 0, blobCache: new Map(), treeFilter: "", saveSeq: 0, loadToken: "", loadPoller: 0,
     edits: new Map(), suppressChange: false, previewTarget: "", previewTimer: 0,
     previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
-    deletions: new Set(), opfPath: "",
+    deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
+    validation: null,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
@@ -88,6 +89,7 @@
     state.zip.file(rel, text);
     state.dirty.add(rel);
     $("dirtyBadge").hidden = false;
+    scheduleDraftSave();
   }
   function refreshDirtyBadge() { $("dirtyBadge").hidden = !(state.dirty.size || state.deletions.size); }
 
@@ -111,7 +113,11 @@
   function listFiles() {
     if (!state.zip) return [];
     const out = [];
-    state.zip.forEach((path, entry) => { if (!entry.dir) out.push(path); });
+    state.zip.forEach((path, entry) => {
+      if (entry.dir) return;
+      if (/\.bak$/i.test(path) || /(^|\/)\.dsh-draft\.json$/i.test(path)) return;
+      out.push(path);
+    });
     return out.sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
   }
   function markDirty() {
@@ -119,8 +125,83 @@
     state.dirty.add(state.current);
     $("dirtyBadge").hidden = false;
     refreshDirtyBadge();
+    scheduleDraftSave();
     $("saveBtn").disabled = !state.zip;
     status("已修改 " + state.current + "，Ctrl+S 保存整本");
+  }
+
+  // ---------- 未保存草稿（IndexedDB，跨阅读器窗口稳定） ----------
+  function hashBytes(bytes) {
+    return new Promise((resolve) => {
+      try {
+        if (!window.crypto || !crypto.subtle) { resolve(String(bytes.length)); return; }
+        crypto.subtle.digest("SHA-256", bytes).then((buf) => {
+          const u = new Uint8Array(buf); let out = "";
+          for (let i = 0; i < Math.min(12, u.length); i++) out += u[i].toString(16).padStart(2, "0");
+          resolve(out);
+        }).catch(() => resolve(String(bytes.length)));
+      } catch { resolve(String(bytes.length)); }
+    });
+  }
+  function draftKeyFor(name, bytes, hash) { return (name || "book.epub") + ":" + bytes.length + ":" + hash; }
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open("lyra-epub-editor", 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore("drafts", { keyPath: "key" }); } catch { } };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbPutDraft(draft) {
+    const db = await idbOpen();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("drafts", "readwrite");
+      tx.objectStore("drafts").put(draft);
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+  async function idbDeleteDraft(key) {
+    if (!key) return;
+    try { const db = await idbOpen(); await new Promise((resolve) => { const tx = db.transaction("drafts", "readwrite"); tx.objectStore("drafts").delete(key); tx.oncomplete = resolve; tx.onerror = resolve; }); db.close(); } catch { }
+  }
+  async function idbGetDraft(key) {
+    if (!key) return null;
+    try { const db = await idbOpen(); const res = await new Promise((resolve) => { const tx = db.transaction("drafts", "readonly"); const r = tx.objectStore("drafts").get(key); r.onsuccess = () => resolve(r.result || null); r.onerror = () => resolve(null); }); db.close(); return res; } catch { return null; }
+  }
+  function scheduleDraftSave() {
+    if (!state.draftKey || !state.zip) return;
+    clearTimeout(state.draftTimer);
+    state.draftTimer = setTimeout(saveDraftNow, 800);
+  }
+  async function saveDraftNow() {
+    if (!state.draftKey || !state.zip) return;
+    if (!state.dirty.size && !state.deletions.size) return;
+    try {
+      const edits = {};
+      for (const [rel, text] of state.edits) edits[rel] = text;
+      await idbPutDraft({ key: state.draftKey, name: state.name, path: state.path || "", size: state.bytes ? state.bytes.length : 0,
+        at: Date.now(), edits, deletions: Array.from(state.deletions) });
+    } catch { }
+  }
+  async function restoreDraftIfAny() {
+    const draft = await idbGetDraft(state.draftKey);
+    if (!draft) return false;
+    const when = new Date(draft.at || 0);
+    const ok = confirm("发现这本书上次未保存的草稿：\n" + when.toLocaleString() + "\n\n是否恢复？\n（选择取消会保留草稿，稍后仍可恢复）");
+    if (!ok) return false;
+    for (const rel of draft.deletions || []) {
+      try { state.zip.remove(rel); } catch { }
+      state.deletions.add(rel);
+    }
+    for (const [rel, text] of Object.entries(draft.edits || {})) {
+      state.zip.file(rel, text);
+      state.edits.set(rel, text);
+      state.dirty.add(rel);
+    }
+    if (state.dirty.size || state.deletions.size) { $("dirtyBadge").hidden = false; refreshDirtyBadge(); renderTree(); }
+    status("已恢复上次未保存的草稿，保存后会写回 EPUB");
+    return true;
   }
 
   // ---------- host bridge ----------
@@ -426,6 +507,8 @@
     state.bytes = bytes;
     state.name = name || state.name;
     state.path = path || state.path;
+    state.bookHash = await hashBytes(bytes);
+    state.draftKey = draftKeyFor(state.name, bytes, state.bookHash);
     clearInterval(state.loadPoller);
     state.dirty.clear(); state.current = ""; state.edits.clear(); state.previewTarget = ""; state.deletions.clear(); state.opfPath = "";
     state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
@@ -435,12 +518,14 @@
     $("saveBtn").disabled = false;
     setEmpty(false);
     renderTree();
+    let restoredDraft = false;
+    try { restoredDraft = await restoreDraftIfAny(); } catch { }
     const files = listFiles();
     const target = files.find((f) => /\.(x?html?|htm)$/i.test(f)) || files[0];
     if (target) await openEntry(target); else {
       $("currentFile").textContent = "没有文件"; cm.setValue(""); cm.setOption("readOnly", true);
     }
-    status("已加载 " + files.length + " 个文件");
+    status(restoredDraft ? "已加载 " + files.length + " 个文件，已恢复未保存草稿" : "已加载 " + files.length + " 个文件");
   }
   async function loadFromHost() {
     setEmpty(false, "正在读取 EPUB…");
@@ -455,12 +540,153 @@
       setEmpty(true, "还没有打开 EPUB\n" + (e && e.message ? e.message : e));
     }
   }
-  async function saveBook() {
+  function virtualExists(rel) { return !!rel && !state.deletions.has(rel) && !!state.zip.file(rel); }
+  function xmlParseError(text) {
+    try {
+      const doc = new DOMParser().parseFromString(text, "application/xml");
+      const err = doc.getElementsByTagName("parsererror");
+      return err && err.length ? (err[0].textContent || "XML 解析失败").slice(0, 220) : "";
+    } catch (e) { return String(e && e.message || e); }
+  }
+  function resolveHrefFile(baseFile, href) {
+    const raw = String(href || "").trim();
+    if (!raw || /^(?:[a-z]+:|\/\/|data:|#)/i.test(raw)) return "";
+    const target = resolvePath(dirOf(baseFile), raw.split("#")[0].split("?")[0]);
+    return target;
+  }
+  async function validateBook() {
+    const issues = [];
+    const add = (level, msg, file) => { if (issues.length < 240) issues.push({ level, msg, file: file || "" }); };
+    if (!state.zip) { add("error", "没有打开 EPUB"); return issues; }
+    const mime = await entryText("mimetype");
+    if (!mime) add("error", "缺少 mimetype 文件", "mimetype");
+    else if (mime.trim() !== "application/epub+zip") add("error", "mimetype 内容不正确（应为 application/epub+zip）", "mimetype");
+    const container = await entryText("META-INF/container.xml");
+    if (!container) add("error", "缺少 META-INF/container.xml", "META-INF/container.xml");
+    const rootMatch = container.match(/<rootfile\b[^>]*full-path=["']([^"']+)["']/i);
+    const opfPath = rootMatch ? safeDecode(rootMatch[1]) : await findOpfPath();
+    if (!opfPath) add("error", "container.xml 里没有 rootfile full-path");
+    const opfText = opfPath ? await entryText(opfPath) : "";
+    if (opfPath && !opfText) add("error", "OPF 文件不存在", opfPath);
+    let manifest = new Map();
+    if (opfText) {
+      const xmlErr = xmlParseError(opfText);
+      if (xmlErr) add("error", "OPF XML 不合法：" + xmlErr, opfPath);
+      try {
+        const doc = new DOMParser().parseFromString(opfText, "application/xml");
+        const opfDir = dirOf(opfPath);
+        for (const item of Array.from(doc.getElementsByTagName("item"))) {
+          const id = item.getAttribute("id") || "";
+          const href = item.getAttribute("href") || "";
+          const target = resolvePath(opfDir, href.split("#")[0]);
+          if (id) manifest.set(id, { href, target, attrs: item });
+          if (target && !virtualExists(target)) add("error", "manifest 引用的文件不存在：" + target, opfPath);
+        }
+        const spineEl = doc.getElementsByTagName("spine")[0];
+        const itemrefs = spineEl ? Array.from(spineEl.getElementsByTagName("itemref")) : [];
+        if (!itemrefs.length) add("error", "OPF 没有 spine 阅读顺序", opfPath);
+        for (const ref of itemrefs) {
+          const idref = ref.getAttribute("idref") || "";
+          if (!manifest.has(idref)) add("error", "spine 引用了不存在的 id：" + idref, opfPath);
+          else if (manifest.get(idref).target && !virtualExists(manifest.get(idref).target)) add("error", "spine 章节文件不存在：" + manifest.get(idref).target, opfPath);
+        }
+      } catch (e) { add("error", "解析 OPF 失败：" + (e && e.message || e), opfPath); }
+    }
+    // XML/XHTML 合法性
+    const files = listFiles();
+    for (const rel of files) {
+      if (!/\.(x?html?|htm|opf|ncx|xml)$/i.test(rel)) continue;
+      const text = await entryText(rel);
+      if (!text) continue;
+      const err = xmlParseError(text);
+      if (err) add(/\.(x?html?|htm)$/i.test(rel) ? "warn" : "error", "XML 不合法：" + err, rel);
+    }
+    // 资源引用
+    for (const rel of files) {
+      if (!/\.(x?html?|htm)$/i.test(rel)) continue;
+      const text = await entryText(rel);
+      if (!text) continue;
+      try {
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        for (const el of Array.from(doc.querySelectorAll("[src]"))) {
+          const raw = el.getAttribute("src") || "";
+          const target = resolveHrefFile(rel, raw);
+          if (target && !virtualExists(target)) add("warn", "引用的资源不存在：" + raw + " → " + target, rel);
+        }
+        for (const el of Array.from(doc.querySelectorAll("link[href]"))) {
+          const raw = el.getAttribute("href") || "";
+          const target = resolveHrefFile(rel, raw);
+          if (target && !virtualExists(target)) add("warn", "引用的样式/资源不存在：" + raw + " → " + target, rel);
+        }
+        for (const el of Array.from(doc.querySelectorAll("a[href]"))) {
+          const raw = el.getAttribute("href") || "";
+          if (!raw || raw.startsWith("#") || /^(?:[a-z]+:|\/\/)/i.test(raw)) continue;
+          const target = resolveHrefFile(rel, raw);
+          if (target && !virtualExists(target)) add("warn", "链接目标不存在：" + raw + " → " + target, rel);
+        }
+      } catch { }
+    }
+    // CSS url() / @import
+    for (const rel of files) {
+      if (!/\.css$/i.test(rel)) continue;
+      const text = await entryText(rel);
+      if (!text) continue;
+      const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)|@import\s+(?:url\()?['"]?([^'")\s;]+)/gi;
+      let m;
+      while ((m = re.exec(text))) {
+        const raw = m[2] || m[3] || "";
+        if (!raw || /^(?:[a-z]+:|\/\/|data:|#)/i.test(raw)) continue;
+        const target = resolvePath(dirOf(rel), raw.split("#")[0].split("?")[0]);
+        if (target && !virtualExists(target)) add("warn", "CSS 引用的文件不存在：" + raw + " → " + target, rel);
+      }
+    }
+    return issues;
+  }
+  function closeValidation() { $("validateOverlay").hidden = true; state.validation = null; }
+  function showValidation(issues, onSave) {
+    state.validation = { issues, onSave };
+    const list = $("validateList"); list.innerHTML = "";
+    const errors = issues.filter((x) => x.level === "error").length;
+    const warns = issues.filter((x) => x.level === "warn").length;
+    $("validateCount").textContent = errors + " 个错误 · " + warns + " 个警告";
+    if (!issues.length) { const d = document.createElement("div"); d.className = "validate-empty"; d.textContent = "检查通过，没有发现结构问题。"; list.appendChild(d); }
+    for (const x of issues) {
+      const row = document.createElement("div"); row.className = "validate-row " + (x.level === "error" ? "error" : "warn");
+      const sev = document.createElement("span"); sev.className = "sev"; sev.textContent = x.level === "error" ? "!" : "?";
+      const msg = document.createElement("div"); msg.className = "msg"; msg.textContent = x.msg;
+      if (x.file) { const f = document.createElement("span"); f.className = "file"; f.textContent = x.file; msg.appendChild(f); }
+      row.appendChild(sev); row.appendChild(msg); list.appendChild(row);
+    }
+    $("validateSave").hidden = !onSave;
+    $("validateSave").textContent = onSave ? "仍然保存" : "";
+    $("validateCancel").textContent = onSave ? "取消" : "关闭";
+    $("validateOverlay").hidden = false;
+    state.validation = { issues, onSave };
+  }
+  async function runValidationManual() {
+    status("正在检查 EPUB 结构…");
+    const issues = await validateBook();
+    if (!issues.length) { status("检查通过：结构正常"); return; }
+    showValidation(issues, null);
+  }
+  async function writeSaveBackup() {
+    if (!state.bytes) return;
+    try {
+      const rel = (SHELL ? (state.path || state.name) : baseName(state.name || state.path || "book.epub")) + ".bak";
+      const data = bytesToBase64(state.bytes);
+      if (EMBEDDED) {
+        try { window.parent.postMessage({ type: "epub-editor-backup", path: rel, data: data }, "*"); } catch { }
+      } else {
+        await callHost("host.file.save", { path: rel, data: data });
+      }
+    } catch { /* 旧宿主不支持 .bak 时不影响保存 */ }
+  }
+  async function performSave() {
     if (!state.zip) return;
-    if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
     $("saveBtn").disabled = true;
     status("正在打包 EPUB…");
     try {
+      await writeSaveBackup();
       // 把内存里尚未写回 ZIP 的文本改动落盘；绝不能只打包原始 ZIP
       for (const rel of Array.from(state.dirty)) {
         if (!isTextFile(rel) || !state.zip.file(rel)) continue;
@@ -493,11 +719,15 @@
         const res = await callHost("host.workspace.save", payload);
         if (!res || res.ok === false) throw new Error((res && res.error) || "宿主保存失败");
       }
+      const oldDraftKey = state.draftKey;
       state.dirty.clear();
       state.edits.clear();
       state.deletions.clear();
       state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
       state.blobCache.clear();
+      if (oldDraftKey) idbDeleteDraft(oldDraftKey);
+      state.bookHash = await hashBytes(bytes);
+      state.draftKey = draftKeyFor(state.name, bytes, state.bookHash);
       $("dirtyBadge").hidden = true;
       renderTree();
       status("已保存：" + state.name);
@@ -507,6 +737,196 @@
     } finally {
       $("saveBtn").disabled = !state.zip;
     }
+  }
+  // ---------- 章节与目录编辑 ----------
+  function outlineTitleFromDoc(text) {
+    try {
+      const doc = new DOMParser().parseFromString(text, "text/html");
+      const t = doc.querySelector("title");
+      if (t && t.textContent.trim()) return t.textContent.trim();
+      const h = doc.querySelector("h1,h2,h3");
+      if (h && h.textContent.trim()) return h.textContent.trim().slice(0, 120);
+    } catch { }
+    return "";
+  }
+  async function readOutlineData() {
+    const opfPath = await findOpfPath();
+    if (!opfPath) throw new Error("没有找到 package.opf");
+    const opfText = await entryText(opfPath);
+    if (!opfText) throw new Error("OPF 内容为空");
+    const doc = new DOMParser().parseFromString(opfText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) throw new Error("OPF XML 不合法");
+    const opfDir = dirOf(opfPath);
+    const manifest = new Map();
+    for (const item of Array.from(doc.getElementsByTagName("item"))) {
+      const id = item.getAttribute("id") || "";
+      const href = item.getAttribute("href") || "";
+      if (!id) continue;
+      manifest.set(id, { href, target: resolvePath(opfDir, href.split("#")[0]), properties: item.getAttribute("properties") || "", mediaType: item.getAttribute("media-type") || "" });
+    }
+    const spineEl = doc.getElementsByTagName("spine")[0];
+    if (!spineEl) throw new Error("OPF 没有 spine");
+    const itemrefs = Array.from(spineEl.getElementsByTagName("itemref"));
+    const navItem = Array.from(manifest.values()).find((x) => /\bnav\b/i.test(x.properties)) || Array.from(manifest.values()).find((x) => /(?:^|\/)nav\.x?html$/i.test(x.target));
+    const navPath = navItem ? navItem.target : "";
+    let navText = navPath && state.zip.file(navPath) ? await entryText(navPath) : "";
+    let navDoc = null;
+    const navTitles = new Map();
+    if (navText) {
+      try {
+        navDoc = new DOMParser().parseFromString(navText, "application/xhtml+xml");
+        if (!navDoc.getElementsByTagName("parsererror").length) {
+          for (const a of Array.from(navDoc.getElementsByTagName("a"))) {
+            const href = a.getAttribute("href") || "";
+            const target = resolvePath(dirOf(navPath), href.split("#")[0]);
+            const label = (a.textContent || "").replace(/\s+/g, " ").trim();
+            if (target && label && !navTitles.has(target)) navTitles.set(target, label);
+          }
+        } else navDoc = null;
+      } catch { navDoc = null; }
+    }
+    const rows = [];
+    for (const ref of itemrefs) {
+      const idref = ref.getAttribute("idref") || "";
+      const item = manifest.get(idref);
+      const target = item ? item.target : "";
+      let title = navTitles.get(target) || "";
+      if (!title && target && state.zip.file(target)) title = outlineTitleFromDoc(await entryText(target));
+      if (!title) title = target ? baseName(target) : idref;
+      rows.push({ idref, target, title, originalTitle: title });
+    }
+    return { opfPath, opfText, opfDir, manifest, rows, navPath, navText, navDoc, navTitles };
+  }
+  let outlineData = null;
+  let outlineDragIndex = -1;
+  function renderOutlineRows() {
+    const host = $("outlineList"); host.innerHTML = "";
+    if (!outlineData || !outlineData.rows.length) {
+      const empty = document.createElement("div"); empty.className = "outline-empty"; empty.textContent = "这本书的 spine 里没有章节"; host.appendChild(empty); return;
+    }
+    outlineData.rows.forEach((row, index) => {
+      const el = document.createElement("div");
+      el.className = "outline-row"; el.draggable = true; el.dataset.index = String(index);
+      el.innerHTML = '<span class="outline-handle">⋮⋮</span><span></span><input spellcheck="false"><span class="outline-file"></span>';
+      const input = el.querySelector("input");
+      input.value = row.title;
+      input.placeholder = "章节标题";
+      input.addEventListener("input", () => { row.title = input.value; });
+      el.querySelector(".outline-file").textContent = row.target || row.idref;
+      el.querySelector(".outline-file").title = row.target || row.idref;
+      el.addEventListener("dragstart", (event) => {
+        outlineDragIndex = index; el.classList.add("dragging");
+        try { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); } catch { }
+      });
+      el.addEventListener("dragend", () => { outlineDragIndex = -1; document.querySelectorAll(".outline-row").forEach((x) => x.classList.remove("dragging", "drag-over")); });
+      el.addEventListener("dragover", (event) => { event.preventDefault(); el.classList.add("drag-over"); });
+      el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+      el.addEventListener("drop", (event) => {
+        event.preventDefault(); el.classList.remove("drag-over");
+        const from = outlineDragIndex;
+        const to = Number(el.dataset.index);
+        if (from < 0 || from === to || !outlineData) return;
+        const [item] = outlineData.rows.splice(from, 1);
+        outlineData.rows.splice(to, 0, item);
+        renderOutlineRows();
+      });
+      host.appendChild(el);
+    });
+  }
+  async function openOutline() {
+    if (!state.zip) return;
+    try {
+      status("正在读取目录…");
+      outlineData = await readOutlineData();
+      renderOutlineRows();
+      $("outlineMeta").textContent = outlineData.rows.length + " 章 · " + outlineData.opfPath;
+      $("outlineOverlay").hidden = false;
+      status("拖动章节排序，改标题后应用");
+    } catch (e) { status("读取目录失败：" + (e && e.message ? e.message : e), true); }
+  }
+  function closeOutline() { $("outlineOverlay").hidden = true; outlineData = null; }
+  async function applyOutline() {
+    if (!outlineData) return;
+    try {
+      const { opfPath, opfText, opfDir, rows, navPath, navText, navDoc } = outlineData;
+      // 1. spine itemref 顺序
+      const spineMatch = opfText.match(/(<spine\b[^>]*>)([\s\S]*?)(<\/spine>)/i);
+      if (!spineMatch) throw new Error("OPF 没有可写的 spine");
+      const refs = [];
+      const refById = new Map();
+      const refRe = /<itemref\b[^>]*\/?>/gi;
+      let rm;
+      while ((rm = refRe.exec(spineMatch[2]))) {
+        const tag = rm[0];
+        const idMatch = tag.match(/idref=["']([^"']+)["']/i);
+        const id = idMatch ? idMatch[1] : "";
+        refs.push(tag);
+        if (id) refById.set(id, tag);
+      }
+      const ordered = [];
+      for (const row of rows) if (refById.has(row.idref)) ordered.push(refById.get(row.idref));
+      for (const tag of refs) if (!ordered.includes(tag)) ordered.push(tag);
+      const nextSpine = spineMatch[1] + "\n" + ordered.map((x) => "  " + x).join("\n") + "\n" + spineMatch[3];
+      let nextOpf = opfText.slice(0, spineMatch.index) + nextSpine + opfText.slice(spineMatch.index + spineMatch[0].length);
+      markEntryEdited(opfPath, nextOpf);
+      // 2. 章节标题（XHTML title + 第一个 h1）
+      for (const row of rows) {
+        const title = String(row.title || "").trim();
+        if (!title || title === row.originalTitle || !row.target || !state.zip.file(row.target)) continue;
+        const old = await entryText(row.target);
+        let next = old;
+        next = next.replace(/<title[^>]*>[\s\S]*?<\/title>/i, "<title>" + xmlEscape(title) + "</title>");
+        next = next.replace(/<h1([^>]*)>[\s\S]*?<\/h1>/i, "<h1$1>" + xmlEscape(title) + "</h1>");
+        if (next !== old) markEntryEdited(row.target, next);
+      }
+      // 3. nav 标题 + 顶层顺序
+      if (navPath && navDoc) {
+        try {
+          const navEl = navDoc.getElementsByTagName("nav")[0];
+          const ol = navEl ? navEl.getElementsByTagName("ol")[0] : null;
+          if (ol) {
+            const lis = Array.from(ol.children).filter((x) => x.tagName && x.tagName.toLowerCase() === "li");
+            const byTarget = new Map();
+            for (const li of lis) {
+              const a = li.getElementsByTagName("a")[0];
+              if (!a) continue;
+              const href = a.getAttribute("href") || "";
+              const target = resolvePath(dirOf(navPath), href.split("#")[0]);
+              if (target) byTarget.set(target, li);
+              const row = rows.find((r) => r.target === target);
+              if (row && row.title !== row.originalTitle) a.textContent = row.title;
+            }
+            const orderedLis = [];
+            for (const row of rows) if (byTarget.has(row.target)) orderedLis.push(byTarget.get(row.target));
+            for (const li of lis) if (!orderedLis.includes(li)) orderedLis.push(li);
+            for (const li of orderedLis) ol.appendChild(li);
+          }
+          const serializer = new XMLSerializer();
+          let nextNav = serializer.serializeToString(navDoc);
+          if (/^<\?xml/i.test(navText) && !/^<\?xml/i.test(nextNav)) nextNav = '<?xml version="1.0" encoding="utf-8"?>\n' + nextNav;
+          markEntryEdited(navPath, nextNav);
+        } catch { }
+      }
+      closeOutline();
+      status("目录与章节标题已应用，保存后写入 EPUB");
+      renderPreview(currentPreviewRel()).catch(() => { });
+    } catch (e) { status("应用目录失败：" + (e && e.message ? e.message : e), true); }
+  }
+
+  async function saveBook() {
+    if (!state.zip) return;
+    if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
+    if (state.saving) return;
+    state.saving = true;
+    try {
+      status("正在检查结构…");
+      const issues = await validateBook();
+      if (issues.length) {
+        showValidation(issues, () => { closeValidation(); performSave(); });
+        return;
+      }
+      await performSave();
+    } finally { state.saving = false; }
   }
   function downloadBook() {
     if (!state.zip) return;
@@ -597,6 +1017,7 @@
       }
     }
     refreshDirtyBadge();
+    scheduleDraftSave();
     if (state.current === rel) {
       const next = listFiles().find((f) => /\.(x?html?|htm)$/i.test(f)) || listFiles()[0];
       if (next) await openEntry(next);
@@ -748,6 +1169,16 @@
     $("filter").addEventListener("input", () => { state.treeFilter = String($("filter").value || "").trim().toLowerCase(); renderTree(); });
     $("newChapterBtn").addEventListener("click", () => createChapter().catch((e) => status(e.message, true)));
     $("findBtn").addEventListener("click", () => openFind());
+    $("validateBtn").addEventListener("click", () => runValidationManual().catch((e) => status(e.message, true)));
+    $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));
+    $("outlineCancel").addEventListener("click", closeOutline);
+    $("outlineApply").addEventListener("click", () => applyOutline().catch((e) => status(e.message, true)));
+    $("validateCancel").addEventListener("click", closeValidation);
+    $("validateSave").addEventListener("click", () => {
+      const cb = state.validation && state.validation.onSave;
+      closeValidation();
+      if (cb) cb();
+    });
     $("findClose").addEventListener("click", closeFind);
     $("findNext").addEventListener("click", () => findNext(false));
     $("findPrev").addEventListener("click", () => findNext(true));
@@ -766,10 +1197,13 @@
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("outlineOverlay").hidden) { closeOutline(); return; }
+      if (event.key === "Escape" && !$("validateOverlay").hidden) { closeValidation(); return; }
       if (state.previewMode === "paged" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         const tag = (event.target && event.target.tagName || "").toLowerCase();
         if (!/input|textarea|select/.test(tag)) { event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return; }
       }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); openOutline().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
       if (EMBEDDED && event.key === "Escape" && $("findBar").hidden) {
         if (state.dirty.size && !confirm("有未保存修改，返回阅读会丢失这些修改，确定？")) return;
