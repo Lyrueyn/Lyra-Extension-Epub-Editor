@@ -913,6 +913,118 @@
     } catch (e) { status("应用目录失败：" + (e && e.message ? e.message : e), true); }
   }
 
+  // ---------- 全书搜索 / 替换 ----------
+  let globalFindData = { matches: [], files: 0, query: "" };
+  function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function gfRegex() {
+    const q = $("gfQuery").value;
+    if (!q) return null;
+    const flags = "g" + ($("gfCase").checked ? "" : "i");
+    try { return $("gfRegex").checked ? new RegExp(q, flags) : new RegExp(escapeRegExp(q), flags); }
+    catch (e) { status("正则表达式错误：" + e.message, true); return undefined; }
+  }
+  function gfSnippet(text, start, end) {
+    const lineStart = text.lastIndexOf("\n", start) + 1;
+    let lineEnd = text.indexOf("\n", end);
+    if (lineEnd < 0) lineEnd = text.length;
+    let a = Math.max(lineStart, start - 42), b = Math.min(lineEnd, end + 60);
+    let pre = text.slice(a, start), hit = text.slice(start, end), post = text.slice(end, b);
+    if (a > lineStart) pre = "…" + pre;
+    if (b < lineEnd) post += "…";
+    return escapeHtml(pre) + "<mark>" + escapeHtml(hit) + "</mark>" + escapeHtml(post);
+  }
+  async function runGlobalSearch() {
+    const re = gfRegex();
+    if (re === null) { status("请输入查找内容", true); return; }
+    if (re === undefined) return;
+    const files = listFiles().filter((f) => isTextFile(f) && f !== "mimetype");
+    const matches = [];
+    let hitFiles = 0;
+    status("正在全书搜索…");
+    for (const file of files) {
+      const text = await entryText(file);
+      if (!text) continue;
+      re.lastIndex = 0;
+      let m; let count = 0;
+      while ((m = re.exec(text)) && matches.length < 1200) {
+        if (m[0] === "") { re.lastIndex++; continue; }
+        const line = text.slice(0, m.index).split("\n").length;
+        matches.push({ file, start: m.index, end: m.index + m[0].length, line, snippet: gfSnippet(text, m.index, m.index + m[0].length) });
+        count++;
+        if (count >= 80) break;
+      }
+      if (count) hitFiles++;
+    }
+    globalFindData = { matches, files: hitFiles, query: $("gfQuery").value };
+    renderGlobalFindResults();
+    status(matches.length ? "找到 " + matches.length + " 处" : "没有找到：" + globalFindData.query);
+  }
+  function renderGlobalFindResults() {
+    const host = $("gfResults"); host.innerHTML = "";
+    const matches = globalFindData.matches || [];
+    $("globalFindCount").textContent = matches.length + " 处 · " + globalFindData.files + " 个文件";
+    if (!matches.length) { const d = document.createElement("div"); d.className = "gf-empty"; d.textContent = globalFindData.query ? "没有匹配结果" : "输入内容后点「搜索」"; host.appendChild(d); return; }
+    let lastFile = "";
+    for (const m of matches) {
+      if (m.file !== lastFile) {
+        lastFile = m.file;
+        const f = document.createElement("div"); f.className = "gf-file"; f.textContent = m.file;
+        const n = matches.filter((x) => x.file === m.file).length;
+        const c = document.createElement("span"); c.textContent = n + " 处"; f.appendChild(c); host.appendChild(f);
+      }
+      const row = document.createElement("div"); row.className = "gf-row";
+      const line = document.createElement("span"); line.className = "gf-line"; line.textContent = "L" + m.line;
+      const sn = document.createElement("span"); sn.className = "gf-snippet"; sn.innerHTML = m.snippet;
+      row.appendChild(line); row.appendChild(sn);
+      row.title = m.file + ":" + m.line;
+      row.addEventListener("click", async () => {
+        closeGlobalFind();
+        await openEntry(m.file);
+        setTimeout(() => {
+          try {
+            const pos = cm.posFromIndex(m.start);
+            cm.setCursor(pos); cm.setSelection(pos, cm.posFromIndex(m.end));
+            cm.scrollIntoView(pos, 80); cm.focus();
+          } catch { }
+        }, 120);
+      });
+      host.appendChild(row);
+    }
+  }
+  async function replaceAllGlobal() {
+    const matches = globalFindData.matches || [];
+    if (!matches.length) { status("先搜索再替换", true); return; }
+    if (!confirm("将在 " + globalFindData.files + " 个文件中替换 " + matches.length + " 处，确定？")) return;
+    const re = gfRegex(); if (!re) return;
+    const replacement = $("gfReplace").value;
+    const byFile = new Map();
+    for (const m of matches) { if (!byFile.has(m.file)) byFile.set(m.file, 0); byFile.set(m.file, byFile.get(m.file) + 1); }
+    status("正在替换…");
+    for (const file of byFile.keys()) {
+      const text = await entryText(file);
+      let next;
+      if ($("gfRegex").checked) next = text.replace(re, replacement);
+      else next = text.replace(re, () => replacement);
+      if (next !== text) markEntryEdited(file, next);
+    }
+    globalFindData.matches = [];
+    renderGlobalFindResults();
+    closeGlobalFind();
+    renderTree();
+    refreshDirtyBadge();
+    scheduleDraftSave();
+    if (currentPreviewRel()) renderPreview(currentPreviewRel()).catch(() => { });
+    status("已在 " + byFile.size + " 个文件中替换 " + matches.length + " 处，保存后写入 EPUB");
+  }
+  function openGlobalFind() {
+    if (!state.zip) return;
+    $("globalFindOverlay").hidden = false;
+    const sel = cm && cm.getSelection(); if (sel && !$("gfQuery").value) $("gfQuery").value = sel;
+    $("gfQuery").focus(); $("gfQuery").select();
+    renderGlobalFindResults();
+  }
+  function closeGlobalFind() { $("globalFindOverlay").hidden = true; }
+
   async function saveBook() {
     if (!state.zip) return;
     if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
@@ -1171,6 +1283,12 @@
     $("findBtn").addEventListener("click", () => openFind());
     $("validateBtn").addEventListener("click", () => runValidationManual().catch((e) => status(e.message, true)));
     $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));
+    $("globalFindBtn").addEventListener("click", () => openGlobalFind());
+    $("gfSearch").addEventListener("click", () => runGlobalSearch().catch((e) => status(e.message, true)));
+    $("gfReplaceAll").addEventListener("click", () => replaceAllGlobal().catch((e) => status(e.message, true)));
+    $("gfClose").addEventListener("click", closeGlobalFind);
+    $("gfQuery").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); runGlobalSearch().catch((e) => status(e.message, true)); } });
+    $("gfRegex").addEventListener("change", () => { globalFindData = { matches: [], files: 0, query: "" }; renderGlobalFindResults(); });
     $("outlineCancel").addEventListener("click", closeOutline);
     $("outlineApply").addEventListener("click", () => applyOutline().catch((e) => status(e.message, true)));
     $("validateCancel").addEventListener("click", closeValidation);
@@ -1197,12 +1315,14 @@
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("globalFindOverlay").hidden) { closeGlobalFind(); return; }
       if (event.key === "Escape" && !$("outlineOverlay").hidden) { closeOutline(); return; }
       if (event.key === "Escape" && !$("validateOverlay").hidden) { closeValidation(); return; }
       if (state.previewMode === "paged" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         const tag = (event.target && event.target.tagName || "").toLowerCase();
         if (!/input|textarea|select/.test(tag)) { event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return; }
       }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") { event.preventDefault(); openGlobalFind(); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); openOutline().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
       if (EMBEDDED && event.key === "Escape" && $("findBar").hidden) {

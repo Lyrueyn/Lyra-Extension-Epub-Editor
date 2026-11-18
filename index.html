@@ -212,6 +212,30 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .outline-actions button{height:30px;padding:0 14px;border-radius:7px;font-size:12px}
 .outline-actions .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}
 
+/* ===== 全书搜索 / 替换 ===== */
+.global-find-overlay{position:fixed;inset:0;z-index:295;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+.global-find-overlay[hidden]{display:none !important}
+.global-find-card{width:min(860px,100%);max-height:min(720px,88vh);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.global-find-head{display:flex;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.gf-count{margin-left:auto;color:var(--muted);font:10px/1 Consolas,monospace;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:3px 8px}
+.gf-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bar)}
+.gf-controls input[type=text]{height:30px;border:1px solid var(--border);border-radius:7px;background:var(--bg-deep);color:var(--text);padding:0 9px;font:12px Consolas,monospace;outline:none}
+#gfQuery{width:210px}#gfReplace{width:190px}
+.gf-controls input[type=text]:focus{border-color:var(--accent)}
+.gf-check{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:11px;cursor:pointer}
+.gf-controls button{height:30px;padding:0 11px;border-radius:7px;font-size:11.5px}
+.gf-controls .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}
+.gf-controls .ghost{background:transparent;color:var(--muted)}
+.gf-results{overflow:auto;padding:6px 10px 12px;flex:1;min-height:140px}
+.gf-file{position:sticky;top:0;z-index:1;background:var(--panel);padding:7px 6px 5px;color:var(--accent);font:10.5px/1.5 Consolas,monospace;border-bottom:1px solid var(--line);display:flex;gap:6px}
+.gf-file span{margin-left:auto;color:var(--muted)}
+.gf-row{display:grid;grid-template-columns:54px minmax(0,1fr);gap:8px;align-items:baseline;padding:5px 8px;border-radius:5px;cursor:pointer;font:11.5px/1.55 Consolas,monospace;color:var(--text)}
+.gf-row:hover{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.gf-line{color:var(--muted);text-align:right}
+.gf-snippet{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gf-snippet mark{background:color-mix(in srgb,var(--accent) 28%,transparent);color:var(--accent);border-radius:2px;padding:0 1px}
+.gf-empty{padding:28px;text-align:center;color:var(--muted);font-size:12px}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -222,6 +246,7 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   <button id="findBtn" title="查找 / 替换 (Ctrl+F)">查找</button>
   <button id="validateBtn" title="检查 EPUB 结构">检查</button>
   <button id="outlineBtn" title="章节与目录">目录</button>
+  <button id="globalFindBtn" title="全书搜索与替换 (Ctrl+Shift+F)">全书</button>
   <span id="bookName" class="book-name">未打开 EPUB</span>
   <span id="dirtyBadge" class="dirty" hidden>未保存</span>
   <select id="themeSelect" class="theme-select" title="界面主题">
@@ -283,6 +308,21 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   </section>
 </div>
 <div id="empty" class="empty" hidden><div>把 EPUB 拖到这里，或从阅读器打开</div></div>
+<div id="globalFindOverlay" class="global-find-overlay" hidden>
+  <div class="global-find-card">
+    <div class="global-find-head"><span>全书搜索与替换</span><span id="globalFindCount" class="gf-count"></span></div>
+    <div class="gf-controls">
+      <input id="gfQuery" type="text" placeholder="查找内容…" spellcheck="false">
+      <input id="gfReplace" type="text" placeholder="替换为…" spellcheck="false">
+      <label class="gf-check"><input id="gfRegex" type="checkbox">正则</label>
+      <label class="gf-check"><input id="gfCase" type="checkbox">区分大小写</label>
+      <button id="gfSearch" type="button">搜索</button>
+      <button id="gfReplaceAll" type="button" class="primary">全部替换</button>
+      <button id="gfClose" type="button" class="ghost">关闭</button>
+    </div>
+    <div id="gfResults" class="gf-results"></div>
+  </div>
+</div>
 <div id="outlineOverlay" class="outline-overlay" hidden>
   <div class="outline-card">
     <div class="outline-head"><span>章节与目录</span><span id="outlineMeta" class="outline-meta"></span></div>
@@ -307,5 +347,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.12"></script>
+<script src="app.js?v=1.0.13"></script>
 </body></html>
