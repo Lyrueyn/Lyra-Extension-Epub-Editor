@@ -14,6 +14,7 @@
     current: "", currentMode: "text", dirty: new Set(), loading: false,
     previewToken: 0, blobCache: new Map(), treeFilter: "", saveSeq: 0, loadToken: "", loadPoller: 0,
     edits: new Map(), suppressChange: false, previewTarget: "", previewTimer: 0,
+    previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
     deletions: new Set(), opfPath: "",
   };
   let cm = null;
@@ -281,6 +282,111 @@
     const script = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("[data-lyra-href]"):null;if(a){e.preventDefault();parent.postMessage({type:"epub-preview-open",path:a.getAttribute("data-lyra-href")},"*");}});<\/script>';
     return (doc.doctype ? new XMLSerializer().serializeToString(doc.doctype) : "<!doctype html>") + doc.documentElement.outerHTML.replace("</body>", script + "</body>");
   }
+  // ---------- 分页预览：尽量贴近阅读器的整页排版 ----------
+  const PREVIEW_THEMES = {
+    sepia: { outer: "#24211d", page: "#f5f0e6", fg: "#2b2620", accent: "#8a5a2b" },
+    paper: { outer: "#20242a", page: "#ffffff", fg: "#1a1a1a", accent: "#2f6fed" },
+    green: { outer: "#17211b", page: "#e9f0e6", fg: "#28402a", accent: "#2e6b45" },
+    dark: { outer: "#0c0c0e", page: "#17181b", fg: "#d9dde3", accent: "#66ccff" },
+    nightblue: { outer: "#060a12", page: "#0a1120", fg: "#b8d4ff", accent: "#6aa8ff" },
+  };
+  function previewTheme() { return PREVIEW_THEMES[state.previewTheme] || PREVIEW_THEMES.sepia; }
+  function currentPreviewRel() {
+    if (!state.current) return "";
+    return (extOf(state.current) === ".css" && state.previewTarget && state.zip.file(state.previewTarget))
+      ? state.previewTarget : state.current;
+  }
+  function updatePreviewControls() {
+    const paged = state.previewMode === "paged" && state.previewKind === "html";
+    const nav = $("pageNav");
+    if (nav) nav.hidden = !paged;
+    $("flowBtn").classList.toggle("active", state.previewMode !== "paged");
+    $("pagedBtn").classList.toggle("active", state.previewMode === "paged");
+    const p = state.paged;
+    if (p) {
+      $("pageLabel").textContent = (p.page + 1) + " / " + p.total;
+      $("pagePrev").disabled = p.page <= 0;
+      $("pageNext").disabled = p.page >= p.total - 1;
+    } else {
+      $("pageLabel").textContent = "1 / 1"; $("pagePrev").disabled = true; $("pageNext").disabled = true;
+    }
+    $("previewTheme").value = state.previewTheme;
+    $("fontLabel").textContent = String(state.previewFont);
+    if ($("previewInfo")) $("previewInfo").textContent = paged ? "分页预览" : (state.previewKind === "html" ? "HTML 预览" : (state.previewKind === "image" ? "图片" : "源码"));
+  }
+  function applyPageTheme(doc) {
+    const t = previewTheme();
+    let st = doc.getElementById("lyra-page-style");
+    if (!st) { st = doc.createElement("style"); st.id = "lyra-page-style"; (doc.head || doc.documentElement).appendChild(st); }
+    st.textContent = `
+      html,body{height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;background:${t.outer}!important}
+      #lyra-page-shell{position:fixed!important;inset:0!important;display:flex!important;align-items:center!important;justify-content:center!important;background:${t.outer}!important;padding:24px;box-sizing:border-box}
+      #lyra-page{position:relative;width:min(760px,100%);height:100%;background:${t.page};color:${t.fg};border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.35);box-sizing:border-box;padding:34px 42px;overflow:hidden}
+      #lyra-page-content{color:${t.fg};column-fill:auto;overflow:visible;font-size:${state.previewFont}px;line-height:1.8;transition:transform .18s ease}
+      #lyra-page-content img{max-width:100%!important;height:auto!important}
+      #lyra-page-content a{color:${t.accent}}
+      #lyra-page-content h1,#lyra-page-content h2,#lyra-page-content h3{color:${t.fg};line-height:1.35}
+      #lyra-page-content p{margin:0 0 1em}
+    `;
+  }
+  function setupPagedPreview(doc) {
+    if (!doc || !doc.body) return;
+    const body = doc.body;
+    // 保留 script/style/link 在本体，其余正文搬进分页容器
+    const shell = doc.createElement("div"); shell.id = "lyra-page-shell";
+    const page = doc.createElement("div"); page.id = "lyra-page";
+    const content = doc.createElement("div"); content.id = "lyra-page-content";
+    for (const node of Array.from(body.childNodes)) {
+      if (node.nodeType === 1 && /^(SCRIPT|STYLE|LINK|META)$/i.test(node.tagName)) continue;
+      content.appendChild(node);
+    }
+    body.appendChild(shell); shell.appendChild(page); page.appendChild(content);
+    applyPageTheme(doc);
+    // 等布局
+    const cs = doc.defaultView.getComputedStyle(page);
+    const padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
+    const pageW = Math.max(120, page.clientWidth - padL - padR);
+    const pageH = Math.max(120, page.clientHeight - padT - padB);
+    const gap = 84;
+    content.style.width = pageW + "px";
+    content.style.height = pageH + "px";
+    content.style.columnWidth = pageW + "px";
+    content.style.columnGap = gap + "px";
+    content.style.columnFill = "auto";
+    // 计算列数（scrollWidth 覆盖所有列）
+    void content.offsetWidth;
+    const total = Math.max(1, Math.ceil((content.scrollWidth + gap) / (pageW + gap)));
+    state.paged = { doc, content, total, page: 0, pageW, pageH, gap };
+    goPreviewPage(0);
+    doc.addEventListener("click", (event) => {
+      if (event.target.closest("a,button,input,select,textarea")) return;
+      turnPreviewPage(event.clientX < doc.documentElement.clientWidth / 2 ? -1 : 1);
+    }, true);
+  }
+  function goPreviewPage(n) {
+    const p = state.paged; if (!p) return;
+    p.page = Math.max(0, Math.min(p.total - 1, n));
+    p.content.style.transform = "translateX(" + (-p.page * (p.pageW + p.gap)) + "px)";
+    updatePreviewControls();
+  }
+  function turnPreviewPage(delta) {
+    if (!state.paged) return;
+    goPreviewPage(state.paged.page + delta);
+  }
+  function applyPreviewPagination() {
+    const frame = $("preview");
+    if (!frame || !frame.contentDocument) return;
+    const doc = frame.contentDocument;
+    if (state.previewMode !== "paged" || state.previewKind !== "html") { state.paged = null; updatePreviewControls(); return; }
+    try { setupPagedPreview(doc); } catch (e) { state.paged = null; }
+    updatePreviewControls();
+  }
+  function rerenderPreview() {
+    const rel = currentPreviewRel();
+    if (rel) renderPreview(rel).catch(() => { });
+  }
+
   async function renderPreview(rel) {
     const token = ++state.previewToken;
     const frame = $("preview");
@@ -291,19 +397,26 @@
       if (entry && /\.(png|jpe?g|gif|webp|svg)$/i.test(rel)) {
         const url = await blobUrlFor(rel);
         if (token !== state.previewToken) return;
+        state.previewKind = "image";
         frame.srcdoc = '<html><body style="margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="' + url + '" style="max-width:100%;max-height:100vh"></body></html>';
         info.textContent = "图片";
+        state.paged = null; updatePreviewControls();
       } else {
+        state.previewKind = "source";
         frame.srcdoc = '<html><body style="margin:0;padding:24px;font:14px/1.7 system-ui;color:#555;background:#fff">' + escapeHtml(rel) + '<br>仅源码编辑，无 HTML 预览</body></html>';
         info.textContent = "源码";
+        state.paged = null; updatePreviewControls();
       }
       return;
     }
     const text = await entryText(rel);
     const html = await rewriteHtml(text, rel);
     if (token !== state.previewToken) return;
+    state.previewKind = "html";
+    state.paged = null;
     frame.srcdoc = html;
     info.textContent = "HTML 预览";
+    updatePreviewControls();
   }
   function escapeHtml(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
@@ -608,6 +721,20 @@
   }
 
   function bind() {
+    $("preview").addEventListener("load", () => applyPreviewPagination());
+    $("flowBtn").addEventListener("click", () => { state.previewMode = "flow"; updatePreviewControls(); rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewMode", "flow"); } catch { } });
+    $("pagedBtn").addEventListener("click", () => { state.previewMode = "paged"; updatePreviewControls(); rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewMode", "paged"); } catch { } });
+    $("pagePrev").addEventListener("click", () => turnPreviewPage(-1));
+    $("pageNext").addEventListener("click", () => turnPreviewPage(1));
+    $("previewTheme").addEventListener("change", () => { state.previewTheme = $("previewTheme").value; updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewTheme", state.previewTheme); } catch { } });
+    $("fontDown").addEventListener("click", () => { state.previewFont = Math.max(14, state.previewFont - 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
+    $("fontUp").addEventListener("click", () => { state.previewFont = Math.min(32, state.previewFont + 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
+    try {
+      state.previewMode = localStorage.getItem("lyra.epubEditor.previewMode") === "paged" ? "paged" : "flow";
+      state.previewTheme = localStorage.getItem("lyra.epubEditor.previewTheme") || "sepia";
+      state.previewFont = Math.max(14, Math.min(32, Number(localStorage.getItem("lyra.epubEditor.previewFont")) || 20));
+    } catch { }
+    updatePreviewControls();
     $("themeSelect").addEventListener("change", () => applyTheme($("themeSelect").value));
     try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());
@@ -639,12 +766,17 @@
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
     document.addEventListener("keydown", (event) => {
+      if (state.previewMode === "paged" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        const tag = (event.target && event.target.tagName || "").toLowerCase();
+        if (!/input|textarea|select/.test(tag)) { event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return; }
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
       if (EMBEDDED && event.key === "Escape" && $("findBar").hidden) {
         if (state.dirty.size && !confirm("有未保存修改，返回阅读会丢失这些修改，确定？")) return;
         try { window.parent.postMessage({ type: "epub-editor-close" }, "*"); } catch { }
       }
     });
+    window.addEventListener("resize", () => { if (state.previewMode === "paged") { clearTimeout(state.previewTimer); state.previewTimer = setTimeout(rerenderPreview, 220); } });
     window.addEventListener("beforeunload", (event) => { if (state.dirty.size) { event.preventDefault(); event.returnValue = ""; } });
     const empty = $("empty");
     const input = document.createElement("input"); input.type = "file"; input.accept = ".epub"; input.hidden = true;
@@ -703,6 +835,7 @@
   }
   function boot() {
     bind();
+
     initEditor();
     if (EMBEDDED) {
       setEmpty(true, "等待阅读器发送 EPUB…");

@@ -143,3 +143,26 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 #topbar button.primary:hover{color:var(--accent-ink)}
 #saveBtn{padding:0 16px !important}
 @media(max-width:1000px){#main{grid-template-columns:220px minmax(0,1fr)}#previewPane{display:none}}
+
+/* ===== 预览：连续 / 分页 ===== */
+.preview-head{gap:8px}
+.preview-head .preview-title{color:var(--text);font-weight:600;font-size:11.5px}
+#previewInfo{color:var(--muted);font-size:10.5px}
+.preview-tools{margin-left:auto;display:flex;align-items:center;gap:7px}
+.seg-toggle{display:flex;padding:2px;border:1px solid var(--border);border-radius:8px;background:var(--bg-deep);gap:2px}
+.seg-toggle button{border:0;background:transparent;color:var(--muted);padding:2px 9px;border-radius:6px;font:10.5px/1.5 system-ui;cursor:pointer;height:22px}
+.seg-toggle button:hover{color:var(--text)}
+.seg-toggle button.active{background:color-mix(in srgb,var(--accent) 18%,var(--panel-2));color:var(--accent);font-weight:600}
+.page-nav{display:flex;align-items:center;gap:3px;border:1px solid var(--border);background:var(--bg-deep);border-radius:8px;padding:2px 4px;height:26px}
+.page-nav[hidden]{display:none !important}
+.page-nav button{border:0;background:transparent;color:var(--text);width:22px;height:22px;padding:0;border-radius:5px;font:15px/20px Consolas,monospace;cursor:pointer}
+.page-nav button:hover{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.page-nav button:disabled{opacity:.25;cursor:default}
+#pageLabel{color:var(--muted);font:10px/1 Consolas,monospace;min-width:44px;text-align:center}
+.preview-select{height:28px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);padding:0 6px;font-size:10.5px;outline:none;cursor:pointer}
+.preview-select:hover{border-color:var(--accent)}
+.font-tools{display:flex;align-items:center;gap:2px;height:26px;border:1px solid var(--border);border-radius:8px;background:var(--bg-deep);padding:1px 3px}
+.font-tools button{border:0;background:transparent;color:var(--muted);width:24px;height:22px;padding:0;border-radius:5px;font:10px/20px system-ui;cursor:pointer}
+.font-tools button:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+#fontLabel{color:var(--muted);font:10px/1 Consolas,monospace;min-width:20px;text-align:center}
+@media(max-width:1180px){.font-tools{display:none}.preview-select{max-width:70px}}
