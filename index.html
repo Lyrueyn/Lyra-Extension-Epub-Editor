@@ -312,6 +312,11 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .validate-row.error{background:color-mix(in srgb,#ff6b86 3%,transparent)}
 .validate-row.warn{background:color-mix(in srgb,#ffca7a 2%,transparent)}
 
+/* ===== 预览跟随阅读器 ===== */
+.follow-reader{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:10.5px;cursor:pointer;white-space:nowrap;padding:0 3px}
+.follow-reader input{accent-color:var(--accent);margin:0}
+.follow-reader:has(input:disabled){opacity:.4;cursor:default}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -380,6 +385,7 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
           <span id="pageLabel">1 / 1</span>
           <button id="pageNext" type="button" title="下一页 (→)">›</button>
         </div>
+        <label class="follow-reader" title="分页预览直接使用阅读器当前主题、字号、行高和页宽"><input id="followReader" type="checkbox">跟随阅读器</label>
         <select id="previewTheme" class="preview-select" title="阅读主题">
           <option value="sepia">米黄</option>
           <option value="paper">白纸</option>
@@ -461,5 +467,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.19"></script>
+<script src="app.js?v=1.0.20"></script>
 </body></html>

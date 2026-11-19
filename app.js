@@ -17,7 +17,7 @@
     previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
     deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
     validation: null, wrap: true, autoSaveMs: 5000, autoSaveTimer: 0,
-    cmDocs: new Map(), binaryDoc: null,
+    cmDocs: new Map(), binaryDoc: null, readerPrefs: null, followReader: false,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
@@ -445,6 +445,34 @@
     nightblue: { outer: "#060a12", page: "#0a1120", fg: "#b8d4ff", accent: "#6aa8ff" },
   };
   function previewTheme() { return PREVIEW_THEMES[state.previewTheme] || PREVIEW_THEMES.sepia; }
+  function parseReaderPrefsFromQuery() {
+    try {
+      const qp = new URLSearchParams(location.search);
+      if (qp.get("readerFont") == null) return;
+      const font = Math.max(12, Math.min(40, Number(qp.get("readerFont")) || 22));
+      const line = Math.max(1.2, Math.min(3, Number(qp.get("readerLine")) || 1.95));
+      const width = Math.max(420, Math.min(1400, Number(qp.get("readerWidth")) || 860));
+      const theme = qp.get("readerTheme") || "dark";
+      const bg = qp.get("readerBg") || "";
+      const fg = qp.get("readerFg") || "";
+      state.readerPrefs = { theme, font, line, width, bg, fg };
+      state.followReader = true;
+      try { if (localStorage.getItem("lyra.epubEditor.followReader") === "0") state.followReader = false; } catch { }
+    } catch { }
+  }
+  function previewSettings() {
+    if (state.followReader && state.readerPrefs) {
+      const rp = state.readerPrefs;
+      const base = PREVIEW_THEMES[rp.theme] || PREVIEW_THEMES.dark || PREVIEW_THEMES.sepia;
+      return {
+        theme: { outer: base.outer, page: rp.bg || base.page, fg: rp.fg || base.fg, accent: base.accent },
+        font: Math.max(12, Math.min(40, rp.font)),
+        line: Math.max(1.2, Math.min(3, rp.line)),
+        width: Math.max(420, Math.min(1400, rp.width)),
+      };
+    }
+    return { theme: previewTheme(), font: state.previewFont, line: 1.8, width: 760 };
+  }
   function currentPreviewRel() {
     if (!state.current) return "";
     return (extOf(state.current) === ".css" && state.previewTarget && state.zip.file(state.previewTarget))
@@ -464,19 +492,33 @@
     } else {
       $("pageLabel").textContent = "1 / 1"; $("pagePrev").disabled = true; $("pageNext").disabled = true;
     }
-    $("previewTheme").value = state.previewTheme;
-    $("fontLabel").textContent = String(state.previewFont);
-    if ($("previewInfo")) $("previewInfo").textContent = paged ? "分页预览" : (state.previewKind === "html" ? "HTML 预览" : (state.previewKind === "image" ? "图片" : "源码"));
+    const follow = !!(state.followReader && state.readerPrefs);
+    if ($("followReader")) {
+      $("followReader").checked = follow;
+      $("followReader").disabled = !state.readerPrefs;
+    }
+    if (follow && state.readerPrefs) {
+      if (PREVIEW_THEMES[state.readerPrefs.theme]) $("previewTheme").value = state.readerPrefs.theme;
+      $("fontLabel").textContent = String(Math.round(state.readerPrefs.font));
+    } else {
+      $("previewTheme").value = state.previewTheme;
+      $("fontLabel").textContent = String(state.previewFont);
+    }
+    if ($("previewInfo")) {
+      const base = paged ? "分页预览" : (state.previewKind === "html" ? "HTML 预览" : (state.previewKind === "image" ? "图片" : "源码"));
+      $("previewInfo").textContent = base + (follow ? " · 跟随阅读器" : "");
+    }
   }
   function applyPageTheme(doc) {
-    const t = previewTheme();
+    const ps = previewSettings();
+    const t = ps.theme;
     let st = doc.getElementById("lyra-page-style");
     if (!st) { st = doc.createElement("style"); st.id = "lyra-page-style"; (doc.head || doc.documentElement).appendChild(st); }
     st.textContent = `
       html,body{height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;background:${t.outer}!important}
       #lyra-page-shell{position:fixed!important;inset:0!important;display:flex!important;align-items:center!important;justify-content:center!important;background:${t.outer}!important;padding:24px;box-sizing:border-box}
-      #lyra-page{position:relative;width:min(760px,100%);height:100%;background:${t.page};color:${t.fg};border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.35);box-sizing:border-box;padding:34px 42px;overflow:hidden}
-      #lyra-page-content{color:${t.fg};column-fill:auto;overflow:visible;font-size:${state.previewFont}px;line-height:1.8;transition:transform .18s ease}
+      #lyra-page{position:relative;width:min(${ps.width}px,100%);height:100%;background:${t.page};color:${t.fg};border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.35);box-sizing:border-box;padding:34px 42px;overflow:hidden}
+      #lyra-page-content{color:${t.fg};column-fill:auto;overflow:visible;font-size:${ps.font}px;line-height:${ps.line};transition:transform .18s ease}
       #lyra-page-content img{max-width:100%!important;height:auto!important}
       #lyra-page-content a{color:${t.accent}}
       #lyra-page-content h1,#lyra-page-content h2,#lyra-page-content h3{color:${t.fg};line-height:1.35}
@@ -1671,13 +1713,19 @@
 
   function bind() {
     $("preview").addEventListener("load", () => applyPreviewPagination());
+    $("followReader").addEventListener("change", () => {
+      state.followReader = $("followReader").checked;
+      try { localStorage.setItem("lyra.epubEditor.followReader", state.followReader ? "1" : "0"); } catch { }
+      updatePreviewControls();
+      if (state.previewMode === "paged") rerenderPreview();
+    });
     $("flowBtn").addEventListener("click", () => { state.previewMode = "flow"; updatePreviewControls(); rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewMode", "flow"); } catch { } });
     $("pagedBtn").addEventListener("click", () => { state.previewMode = "paged"; updatePreviewControls(); rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewMode", "paged"); } catch { } });
     $("pagePrev").addEventListener("click", () => turnPreviewPage(-1));
     $("pageNext").addEventListener("click", () => turnPreviewPage(1));
-    $("previewTheme").addEventListener("change", () => { state.previewTheme = $("previewTheme").value; updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewTheme", state.previewTheme); } catch { } });
-    $("fontDown").addEventListener("click", () => { state.previewFont = Math.max(14, state.previewFont - 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
-    $("fontUp").addEventListener("click", () => { state.previewFont = Math.min(32, state.previewFont + 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
+    $("previewTheme").addEventListener("change", () => { state.followReader = false; try { localStorage.setItem("lyra.epubEditor.followReader", "0"); } catch { } state.previewTheme = $("previewTheme").value; updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewTheme", state.previewTheme); } catch { } });
+    $("fontDown").addEventListener("click", () => { state.followReader = false; try { localStorage.setItem("lyra.epubEditor.followReader", "0"); } catch { } state.previewFont = Math.max(14, state.previewFont - 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
+    $("fontUp").addEventListener("click", () => { state.followReader = false; try { localStorage.setItem("lyra.epubEditor.followReader", "0"); } catch { } state.previewFont = Math.min(32, state.previewFont + 1); updatePreviewControls(); if (state.previewMode === "paged") rerenderPreview(); try { localStorage.setItem("lyra.epubEditor.previewFont", String(state.previewFont)); } catch { } });
     try {
       state.previewMode = localStorage.getItem("lyra.epubEditor.previewMode") === "paged" ? "paged" : "flow";
       state.previewTheme = localStorage.getItem("lyra.epubEditor.previewTheme") || "sepia";
@@ -1833,6 +1881,7 @@
     cm.setSize("100%", "100%");
   }
   function boot() {
+    parseReaderPrefsFromQuery();
     bind();
 
     initEditor();
