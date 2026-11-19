@@ -281,6 +281,14 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .auto-save-select{max-width:92px}
 #autoSaveSelect option{background:var(--panel);color:var(--text)}
 
+/* ===== 章节拆分 / 合并 ===== */
+#splitChapterBtn,#mergeChapterBtn{margin-left:2px}
+#splitChapterBtn:disabled,#mergeChapterBtn:disabled{opacity:.35;cursor:default;color:var(--muted)}
+
+/* 侧栏章节工具条 */
+.side-tools{display:flex;gap:4px;padding:0 8px 7px}
+.side-tools .side-btn{flex:1;min-width:0;margin:0;padding:3px 2px;white-space:nowrap;font-size:10px;text-align:center}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -315,7 +323,8 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 </header>
 <div id="main">
   <aside id="sidebar">
-    <div class="side-head"><span>EPUB 文件</span><span id="fileCount"></span><button id="newChapterBtn" class="side-btn" type="button" title="新建 XHTML 章节并写入 OPF/目录">＋章节</button></div>
+    <div class="side-head"><span>EPUB 文件</span><span id="fileCount"></span></div>
+    <div class="side-tools"><button id="splitChapterBtn" class="side-btn" type="button" title="在光标处把当前章节拆成两章">拆分</button><button id="mergeChapterBtn" class="side-btn" type="button" title="把下一章合并到当前章节">合并</button><button id="newChapterBtn" class="side-btn" type="button" title="新建 XHTML 章节并写入 OPF/目录">＋章节</button></div>
     <input id="filter" type="text" placeholder="筛选文件…" spellcheck="false">
     <div id="tree" class="tree"></div>
   </aside>
@@ -427,5 +436,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.16"></script>
+<script src="app.js?v=1.0.17"></script>
 </body></html>

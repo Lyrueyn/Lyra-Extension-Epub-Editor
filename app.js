@@ -81,6 +81,19 @@
   function xmlEscape(text) {
     return String(text == null ? "" : text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+  function findNavPath(opfText, opfDir) {
+    const items = opfText.match(/<item\b[^>]*\/?>/gi) || [];
+    for (const tag of items) {
+      const hm = tag.match(/href=["']([^"']+)["']/i);
+      const pm = tag.match(/properties=["']([^"']*)["']/i);
+      if (hm && pm && /(^|\s)nav(\s|$)/i.test(pm[1])) return resolvePath(opfDir, hm[1].split("#")[0]);
+    }
+    for (const tag of items) {
+      const hm = tag.match(/href=["']([^"']+)["']/i);
+      if (hm && /(?:^|\/)nav\.x?html?$/i.test(hm[1])) return resolvePath(opfDir, hm[1].split("#")[0]);
+    }
+    return "";
+  }
   async function findOpfPath() {
     if (state.opfPath && state.zip.file(state.opfPath)) return state.opfPath;
     const c = await entryText("META-INF/container.xml");
@@ -316,6 +329,7 @@
       cm.setOption("readOnly", true);
       $("saveBtn").disabled = !state.zip;
       status("二进制文件，不支持源码编辑：" + rel);
+      updateChapterButtons();
       renderPreview(rel).catch(() => { });
       return;
     }
@@ -332,6 +346,7 @@
     cm.setOption("mode", modeFor(rel));
     cm.clearHistory();
     $("saveBtn").disabled = !state.zip;
+    updateChapterButtons();
     const previewRel = (extOf(rel) === ".css" && state.previewTarget && state.zip.file(state.previewTarget)) ? state.previewTarget : rel;
     renderPreview(previewRel).catch(() => { });
   }
@@ -1317,10 +1332,9 @@
     if (/<\/spine>/i.test(nextOpf)) nextOpf = nextOpf.replace(/<\/spine>/i, '  <itemref idref="' + id + '"/>\n</spine>');
     markEntryEdited(opfPath, nextOpf);
     // 尝试更新 EPUB3 nav
-    const navMatch = nextOpf.match(/<item\b[^>]*properties=["'][^"']*nav[^"']*["'][^>]*href=["']([^"']+)["']/i) ||
-      nextOpf.match(/<item\b[^>]*href=["']([^"']*nav[^"']*\.x?html)["'][^>]*>/i);
-    if (navMatch) {
-      const navPath = resolvePath(contentDir, navMatch[1]);
+    const navPath = findNavPath(nextOpf, contentDir);
+    if (navPath) {
+
       if (state.zip.file(navPath)) {
         let navText = await entryText(navPath);
         const navHref = relativeHref(dirOf(navPath), rel);
@@ -1333,12 +1347,129 @@
     renderTree();
     status("已新建章节 " + cleanTitle + "（已加入 OPF 与目录，保存后写入 EPUB）");
   }
-  async function deleteEntry(rel) {
+  function updateChapterButtons() {
+    const isHtml = !!state.current && isHtmlFile(state.current);
+    if ($("splitChapterBtn")) $("splitChapterBtn").disabled = !isHtml;
+    if ($("mergeChapterBtn")) $("mergeChapterBtn").disabled = !isHtml;
+  }
+  function chapterBodyParts(text) {
+    const open = /<body\b[^>]*>/i.exec(text);
+    const close = /<\/body\s*>/i.exec(text);
+    if (!open || !close || close.index < open.index) return null;
+    const start = open.index + open[0].length;
+    return { start, end: close.index, prefix: text.slice(0, start), suffix: text.slice(close.index) };
+  }
+  function replaceHeadTitle(text, title) {
+    if (/<title[^>]*>[\s\S]*?<\/title>/i.test(text)) return text.replace(/<title[^>]*>[\s\S]*?<\/title>/i, "<title>" + xmlEscape(title) + "</title>");
+    return text;
+  }
+  async function spineChapterFiles() {
+    const opfPath = await findOpfPath();
+    if (!opfPath) return { opfPath: "", files: [], targets: [], ids: [], opfText: "" };
+    const opfText = await entryText(opfPath);
+    const doc = new DOMParser().parseFromString(opfText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) return { opfPath, files: [], targets: [], ids: [], opfText };
+    const opfDir = dirOf(opfPath);
+    const manifest = new Map();
+    for (const item of Array.from(doc.getElementsByTagName("item"))) {
+      const id = item.getAttribute("id") || "";
+      const href = item.getAttribute("href") || "";
+      if (id) manifest.set(id, { href, target: resolvePath(opfDir, href.split("#")[0]) });
+    }
+    const spine = doc.getElementsByTagName("spine")[0];
+    const ids = spine ? Array.from(spine.getElementsByTagName("itemref")).map((x) => x.getAttribute("idref") || "") : [];
+    const targets = ids.map((id) => manifest.get(id)?.target || "");
+    return { opfPath, files: targets, targets, ids, opfText, manifest, opfDir };
+  }
+  async function splitChapterAtCursor() {
+    if (!state.current || !isHtmlFile(state.current)) { status("先打开一个 XHTML 章节", true); return; }
+    const cursor = cm.indexFromPos(cm.getCursor());
+    const text = await entryText(state.current);
+    const body = chapterBodyParts(text);
+    if (!body) { status("找不到 <body>，无法拆分", true); return; }
+    if (cursor <= body.start || cursor >= body.end) { status("光标需要放在正文中间", true); return; }
+    const before = text.slice(body.start, cursor);
+    const blockRe = /<\/(?:p|div|h[1-6]|section|article|li|blockquote|pre|table|tr|td)\s*>/gi;
+    let m; let splitRel = 0;
+    while ((m = blockRe.exec(before))) splitRel = m.index + m[0].length;
+    if (!splitRel) { status("光标前没有完整的段落/块级元素，先把光标放到段落之后", true); return; }
+    const splitPos = body.start + splitRel;
+    const part1 = text.slice(body.start, splitPos), part2 = text.slice(splitPos, body.end);
+    if (!part1.trim() || !part2.trim()) { status("拆分后至少有一半是空的，换个位置再试", true); return; }
+    const oldTitle = (text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || baseName(state.current)).replace(/<[^>]+>/g, "").trim();
+    const newTitle = prompt("拆分出的新章节标题", oldTitle + " · 下");
+    if (newTitle == null) return;
+    const cleanTitle = String(newTitle).trim() || (oldTitle + " · 下");
+    const opfPath = await findOpfPath();
+    if (!opfPath) { status("没有找到 OPF", true); return; }
+    const opfText = await entryText(opfPath);
+    const opfDir = dirOf(opfPath);
+    const spine = await spineChapterFiles();
+    const idx = spine.targets.indexOf(state.current);
+    if (idx < 0) { status("当前章节不在 spine 中，无法插入新章节", true); return; }
+    const currentId = spine.ids[idx];
+    const stem = baseName(state.current).replace(/\.[^.]+$/, "");
+    let newRel = (dirOf(state.current) ? dirOf(state.current) + "/" : "") + stem + "-2" + (extOf(state.current) || ".xhtml");
+    let n = 2;
+    while (state.zip.file(newRel)) { n++; newRel = (dirOf(state.current) ? dirOf(state.current) + "/" : "") + stem + "-" + n + (extOf(state.current) || ".xhtml"); }
+    let newId = (stem + "-2").replace(/[^\w-]/g, "_");
+    while (spine.ids.includes(newId)) newId += "_x";
+    const newText = replaceHeadTitle(text.slice(0, body.start) + part2 + text.slice(body.end), cleanTitle);
+    state.zip.file(newRel, newText);
+    markEntryEdited(newRel, newText);
+    markEntryEdited(state.current, text.slice(0, body.start) + part1 + text.slice(body.end));
+    const newHref = relativeHref(opfDir, newRel);
+    const itemRe = new RegExp('<item\\b[^>]*href=["\']' + relativeHref(opfDir, state.current).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '["\'][^>]*>', "i");
+    const im = opfText.match(itemRe);
+    if (!im) { status("OPF 里找不到当前章节 manifest，无法插入", true); return; }
+    let nextOpf = opfText.slice(0, im.index) + im[0] + '\n  <item id="' + newId + '" href="' + xmlEscape(newHref) + '" media-type="application/xhtml+xml"/>' + opfText.slice(im.index + im[0].length);
+    const refRe = new RegExp('<itemref\\b[^>]*idref=["\']' + currentId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '["\'][^>]*>', "i");
+    const rm = nextOpf.match(refRe);
+    if (rm) nextOpf = nextOpf.slice(0, rm.index) + rm[0] + '\n  <itemref idref="' + newId + '"/>' + nextOpf.slice(rm.index + rm[0].length);
+    markEntryEdited(opfPath, nextOpf);
+    const navPath = findNavPath(nextOpf, opfDir);
+    if (navPath) {
+      if (state.zip.file(navPath)) {
+        const navText = await entryText(navPath);
+        const curHref = relativeHref(dirOf(navPath), state.current);
+        const newNavHref = relativeHref(dirOf(navPath), newRel);
+        const esc = curHref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const liRe = new RegExp('(<li\\b[^>]*>\\s*<a\\b[^>]*href=["\']' + esc + '["\'][^>]*>[\\s\\S]*?</a>\\s*</li>)', "i");
+        const li = liRe.exec(navText);
+        if (li) markEntryEdited(navPath, navText.slice(0, li.index) + li[1] + '\n  <li><a href="' + xmlEscape(newNavHref) + '">' + xmlEscape(cleanTitle) + '</a></li>' + navText.slice(li.index + li[1].length));
+      }
+    }
+    renderTree();
+    updateChapterButtons();
+    await openEntry(newRel);
+    status("已拆分为「" + newRel + "」，保存后写入 EPUB");
+  }
+  async function mergeNextChapter() {
+    if (!state.current || !isHtmlFile(state.current)) { status("先打开一个 XHTML 章节", true); return; }
+    const spine = await spineChapterFiles();
+    const idx = spine.targets.indexOf(state.current);
+    if (idx < 0) { status("当前章节不在 spine 中", true); return; }
+    const nextRel = spine.targets[idx + 1];
+    if (!nextRel || !state.zip.file(nextRel)) { status("当前章节已经是最后一章", true); return; }
+    if (!isHtmlFile(nextRel)) { status("下一章不是 XHTML，无法合并", true); return; }
+    const curText = await entryText(state.current);
+    const nextText = await entryText(nextRel);
+    const a = chapterBodyParts(curText), b = chapterBodyParts(nextText);
+    if (!a || !b) { status("章节缺少 <body>，无法合并", true); return; }
+    if (!confirm("把「" + nextRel + "」合并到当前章节，并删除下一章？")) return;
+    const merged = curText.slice(0, a.start) + curText.slice(a.start, a.end).replace(/\s+$/, "") + "\n" + nextText.slice(b.start, b.end).trim() + "\n" + curText.slice(a.end);
+    markEntryEdited(state.current, merged);
+    await deleteEntry(nextRel, { skipConfirm: true });
+    updateChapterButtons();
+    status("已合并下一章：" + nextRel + "，保存后写入 EPUB");
+  }
+
+  async function deleteEntry(rel, opts = {}) {
     if (!state.zip || !rel) return;
     const opfPath = await findOpfPath();
     const keep = rel === "mimetype" || /^META-INF\/container\.xml$/i.test(rel) || (opfPath && rel === opfPath);
     if (keep) { status("不能删除 EPUB 必需文件：" + rel, true); return; }
-    if (!confirm("从整本书删除 " + rel + "？\n会尝试同步清理 OPF/目录引用。")) return;
+    if (!opts.skipConfirm && !confirm("从整本书删除 " + rel + "？\n会尝试同步清理 OPF/目录引用。")) return;
     state.zip.remove(rel);
     state.edits.delete(rel); state.dirty.delete(rel); state.deletions.add(rel);
     if (opfPath) {
@@ -1353,9 +1484,8 @@
       let nextOpf = opfText.replace(itemRe, "");
       if (id) nextOpf = nextOpf.replace(new RegExp('<itemref\\b[^>]*idref=["\']' + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '["\'][^>]*>', "i"), "");
       markEntryEdited(opfPath, nextOpf);
-      const navMatch = nextOpf.match(/<item\b[^>]*properties=["'][^"']*nav[^"']*["'][^>]*href=["']([^"']+)["']/i);
-      if (navMatch) {
-        const navPath = resolvePath(opfDir, navMatch[1]);
+      const navPath = findNavPath(nextOpf, opfDir);
+      if (navPath) {
         if (state.zip.file(navPath)) {
           const navText = await entryText(navPath);
           const navHref = relativeHref(dirOf(navPath), rel);
@@ -1527,6 +1657,8 @@
     }
     $("filter").addEventListener("input", () => { state.treeFilter = String($("filter").value || "").trim().toLowerCase(); renderTree(); });
     $("newChapterBtn").addEventListener("click", () => createChapter().catch((e) => status(e.message, true)));
+    $("splitChapterBtn").addEventListener("click", () => splitChapterAtCursor().catch((e) => status(e.message, true)));
+    $("mergeChapterBtn").addEventListener("click", () => mergeNextChapter().catch((e) => status(e.message, true)));
     $("findBtn").addEventListener("click", () => openFind());
     $("validateBtn").addEventListener("click", () => runValidationManual().catch((e) => status(e.message, true)));
     $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));

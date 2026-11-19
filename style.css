@@ -275,3 +275,11 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 /* ===== 自动保存 ===== */
 .auto-save-select{max-width:92px}
 #autoSaveSelect option{background:var(--panel);color:var(--text)}
+
+/* ===== 章节拆分 / 合并 ===== */
+#splitChapterBtn,#mergeChapterBtn{margin-left:2px}
+#splitChapterBtn:disabled,#mergeChapterBtn:disabled{opacity:.35;cursor:default;color:var(--muted)}
+
+/* 侧栏章节工具条 */
+.side-tools{display:flex;gap:4px;padding:0 8px 7px}
+.side-tools .side-btn{flex:1;min-width:0;margin:0;padding:3px 2px;white-space:nowrap;font-size:10px;text-align:center}
