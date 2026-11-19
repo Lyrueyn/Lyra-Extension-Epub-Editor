@@ -16,7 +16,7 @@
     edits: new Map(), suppressChange: false, previewTarget: "", previewTimer: 0,
     previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
     deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
-    validation: null, wrap: true,
+    validation: null, wrap: true, autoSaveMs: 30000, autoSaveTimer: 0,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
@@ -97,6 +97,7 @@
     state.dirty.add(rel);
     $("dirtyBadge").hidden = false;
     scheduleDraftSave();
+    scheduleAutoSave();
   }
   function refreshDirtyBadge() { $("dirtyBadge").hidden = !(state.dirty.size || state.deletions.size); }
 
@@ -133,6 +134,7 @@
     $("dirtyBadge").hidden = false;
     refreshDirtyBadge();
     scheduleDraftSave();
+    scheduleAutoSave();
     $("saveBtn").disabled = !state.zip;
     status("已修改 " + state.current + "，Ctrl+S 保存整本");
   }
@@ -209,6 +211,40 @@
     if (state.dirty.size || state.deletions.size) { $("dirtyBadge").hidden = false; refreshDirtyBadge(); renderTree(); }
     status("已恢复上次未保存的草稿，保存后会写回 EPUB");
     return true;
+  }
+
+  // ---------- EPUB 自动保存 ----------
+  function setAutoSave(ms) {
+    state.autoSaveMs = Math.max(0, Number(ms) || 0);
+    const sel = $("autoSaveSelect");
+    if (sel) sel.value = String(state.autoSaveMs);
+    try { localStorage.setItem("lyra.epubEditor.autoSave", String(state.autoSaveMs)); } catch { }
+    scheduleAutoSave();
+  }
+  function scheduleAutoSave() {
+    clearTimeout(state.autoSaveTimer);
+    if (!state.autoSaveMs || !state.zip) return;
+    if (!state.dirty.size && !state.deletions.size) return;
+    state.autoSaveTimer = setTimeout(() => { autoSaveNow().catch(() => { }); }, state.autoSaveMs);
+  }
+  async function autoSaveNow() {
+    if (!state.autoSaveMs || !state.zip || state.saving) return;
+    if (!state.dirty.size && !state.deletions.size) return;
+    // 弹窗打开时不要偷偷保存，避免底层变化打断用户操作
+    if (!$("validateOverlay").hidden || !$("outlineOverlay").hidden || !$("globalFindOverlay").hidden || !$("metaOverlay").hidden || !$("assetsOverlay").hidden) {
+      scheduleAutoSave(); return;
+    }
+    state.saving = true;
+    try {
+      const issues = await validateBook();
+      const errors = issues.filter((x) => x.level === "error");
+      if (errors.length) {
+        status("自动保存暂停：" + errors.length + " 个结构错误，请先点「检查」处理", true);
+        scheduleAutoSave();
+        return;
+      }
+      await performSave({ auto: true });
+    } finally { state.saving = false; }
   }
 
   // ---------- host bridge ----------
@@ -517,6 +553,7 @@
     state.bookHash = await hashBytes(bytes);
     state.draftKey = draftKeyFor(state.name, bytes, state.bookHash);
     clearInterval(state.loadPoller);
+    clearTimeout(state.autoSaveTimer);
     state.dirty.clear(); state.current = ""; state.edits.clear(); state.previewTarget = ""; state.deletions.clear(); state.opfPath = "";
     state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
     state.blobCache.clear();
@@ -688,10 +725,12 @@
       }
     } catch { /* 旧宿主不支持 .bak 时不影响保存 */ }
   }
-  async function performSave() {
+  async function performSave(opts = {}) {
     if (!state.zip) return;
+    const auto = !!opts.auto;
+    clearTimeout(state.autoSaveTimer);
     $("saveBtn").disabled = true;
-    status("正在打包 EPUB…");
+    status(auto ? "正在自动保存…" : "正在打包 EPUB…");
     try {
       await writeSaveBackup();
       // 把内存里尚未写回 ZIP 的文本改动落盘；绝不能只打包原始 ZIP
@@ -718,7 +757,7 @@
           savePending.set(saveId, { resolve, reject });
           setTimeout(() => { if (savePending.has(saveId)) { savePending.delete(saveId); reject(new Error("阅读器保存响应超时")); } }, 15000);
         });
-        window.parent.postMessage({ type: "epub-editor-save", saveId: saveId, name: state.name, data: bytes.buffer }, "*");
+        window.parent.postMessage({ type: "epub-editor-save", saveId: saveId, name: state.name, silent: auto, data: bytes.buffer }, "*");
         await ack;
       } else {
         const payload = { data: b64 };
@@ -737,8 +776,12 @@
       state.draftKey = draftKeyFor(state.name, bytes, state.bookHash);
       $("dirtyBadge").hidden = true;
       renderTree();
-      status("已保存：" + state.name);
-      if (state.current && state.zip.file(state.current)) renderPreview(state.previewTarget && isHtmlFile(state.previewTarget) ? state.previewTarget : state.current).catch(() => { });
+      if (auto) {
+        status("已自动保存 " + new Date().toLocaleTimeString());
+      } else {
+        status("已保存：" + state.name);
+        if (state.current && state.zip.file(state.current)) renderPreview(state.previewTarget && isHtmlFile(state.previewTarget) ? state.previewTarget : state.current).catch(() => { });
+      }
     } catch (e) {
       status("保存失败：" + (e && e.message ? e.message : e), true);
     } finally {
@@ -1222,6 +1265,7 @@
     if (!state.zip) return;
     if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
     if (state.saving) return;
+    clearTimeout(state.autoSaveTimer);
     state.saving = true;
     try {
       status("正在检查结构…");
@@ -1323,6 +1367,7 @@
     }
     refreshDirtyBadge();
     scheduleDraftSave();
+    scheduleAutoSave();
     if (state.current === rel) {
       const next = listFiles().find((f) => /\.(x?html?|htm)$/i.test(f)) || listFiles()[0];
       if (next) await openEntry(next);
@@ -1463,6 +1508,13 @@
     updatePreviewControls();
     $("themeSelect").addEventListener("change", () => applyTheme($("themeSelect").value));
     try { applyWrap(localStorage.getItem("lyra.epubEditor.wrap") !== "0"); } catch { applyWrap(true); }
+    try {
+      const rawAuto = localStorage.getItem("lyra.epubEditor.autoSave");
+      const savedAuto = rawAuto === null ? 30000 : Number(rawAuto);
+      state.autoSaveMs = Number.isFinite(savedAuto) && savedAuto >= 0 ? savedAuto : 30000;
+    } catch { state.autoSaveMs = 30000; }
+    $("autoSaveSelect").value = String(state.autoSaveMs);
+    $("autoSaveSelect").addEventListener("change", () => setAutoSave(Number($("autoSaveSelect").value)));
     $("wrapBtn").addEventListener("click", () => applyWrap(!state.wrap));
     try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());

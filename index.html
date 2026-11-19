@@ -277,6 +277,10 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .assets-actions button{height:30px;padding:0 14px;border-radius:7px;font-size:12px}
 .assets-actions .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}
 
+/* ===== 自动保存 ===== */
+.auto-save-select{max-width:92px}
+#autoSaveSelect option{background:var(--panel);color:var(--text)}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -293,6 +297,12 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   <button id="assetsBtn" title="图片与封面">资源</button>
   <span id="bookName" class="book-name">未打开 EPUB</span>
   <span id="dirtyBadge" class="dirty" hidden>未保存</span>
+  <select id="autoSaveSelect" class="theme-select auto-save-select" title="自动保存间隔">
+    <option value="0">自动保存关</option>
+    <option value="10000">10 秒</option>
+    <option value="30000">30 秒</option>
+    <option value="60000">60 秒</option>
+  </select>
   <select id="themeSelect" class="theme-select" title="界面主题">
     <option value="lyra">经典蓝</option>
     <option value="violet">深空紫</option>
@@ -417,5 +427,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.15"></script>
+<script src="app.js?v=1.0.16"></script>
 </body></html>
