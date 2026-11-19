@@ -1746,6 +1746,7 @@
     $("autoSaveSelect").value = String(state.autoSaveMs);
     $("autoSaveSelect").addEventListener("change", () => setAutoSave(Number($("autoSaveSelect").value)));
     $("wrapBtn").addEventListener("click", () => applyWrap(!state.wrap));
+    $("formatBtn").addEventListener("click", () => formatCurrentFile());
     try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());
     if (EMBEDDED) {
@@ -1860,11 +1861,140 @@
       if (rel) renderPreview(rel).catch(() => { });
     }, 260);
   }
+  // ---------- 源码格式化 / 行编辑 ----------
+  function formatMarkupText(text) {
+    if (/<(pre|textarea)\b/i.test(text)) return { ok: false, error: "包含 <pre>/<textarea>，为避免改坏预格式内容，暂不自动格式化" };
+    if (/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/i.test(text)) return { ok: false, error: "包含内联 <script>/<style>，暂不自动格式化" };
+    const inline = new Set(["a","abbr","b","bdi","bdo","br","cite","code","data","dfn","em","i","img","kbd","mark","q","rp","rt","ruby","s","samp","small","span","strong","sub","sup","time","u","var","wbr"]);
+    const voidTags = new Set(["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"]);
+    const re = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<\/?[A-Za-z][^>]*>|[^<]+/gi;
+    const out = [];
+    let depth = 0, buffer = "";
+    const indent = () => "  ".repeat(Math.max(0, depth));
+    const flush = () => {
+      const v = buffer.replace(/\s+/g, " ").trim();
+      if (v) out.push(indent() + v);
+      buffer = "";
+    };
+    let m;
+    while ((m = re.exec(text))) {
+      const tok = m[0];
+      if (tok.startsWith("<!--") || tok.startsWith("<![CDATA[") || tok.startsWith("<?") || /^<!DOCTYPE/i.test(tok)) {
+        flush(); out.push(indent() + tok.trim());
+        continue;
+      }
+      if (tok.startsWith("<")) {
+        const close = /^<\//.test(tok);
+        const nameMatch = tok.match(/^<\/?\s*([A-Za-z][\w:.-]*)/);
+        const lname = nameMatch ? nameMatch[1].toLowerCase().split(":").pop() : "";
+        const selfClose = /\/\s*>$/.test(tok);
+        if (close) {
+          flush(); depth = Math.max(0, depth - 1); out.push(indent() + tok.trim());
+        } else if (inline.has(lname) && !voidTags.has(lname)) {
+          buffer += tok;
+        } else if (voidTags.has(lname) || selfClose) {
+          flush(); out.push(indent() + tok.trim());
+        } else {
+          flush(); out.push(indent() + tok.trim());
+          depth++;
+        }
+      } else {
+        buffer += tok;
+      }
+    }
+    flush();
+    return { ok: true, text: out.join("\n") + (text.endsWith("\n") ? "\n" : "") };
+  }
+  function formatCssText(text) {
+    let out = [], depth = 0, buf = "", i = 0, paren = 0;
+    const indent = () => "  ".repeat(Math.max(0, depth));
+    const flush = (suffix) => {
+      const v = buf.replace(/\s+/g, " ").trim();
+      if (v) out.push(indent() + v + (suffix || ""));
+      buf = "";
+    };
+    while (i < text.length) {
+      const ch = text[i], next = text[i + 1];
+      if (ch === "/" && next === "*") {
+        flush();
+        let end = text.indexOf("*/", i + 2);
+        if (end < 0) end = text.length; else end += 2;
+        out.push(indent() + text.slice(i, end).trim());
+        i = end; continue;
+      }
+      if (ch === '"' || ch === "'") {
+        let j = i + 1;
+        while (j < text.length) {
+          if (text[j] === "\\") j += 2;
+          else if (text[j] === ch) { j++; break; }
+          else j++;
+        }
+        buf += text.slice(i, j); i = j; continue;
+      }
+      if (ch === "(") { paren++; buf += ch; i++; continue; }
+      if (ch === ")") { paren = Math.max(0, paren - 1); buf += ch; i++; continue; }
+      if (paren === 0 && ch === "{") {
+        flush(" {"); depth++; i++; continue;
+      }
+      if (paren === 0 && ch === "}") {
+        flush(); depth = Math.max(0, depth - 1); out.push(indent() + "}"); i++; continue;
+      }
+      if (paren === 0 && ch === ";") {
+        flush(";"); i++; continue;
+      }
+      buf += ch; i++;
+    }
+    flush();
+    return { ok: true, text: out.join("\n") + (text.endsWith("\n") ? "\n" : "") };
+  }
+  function formatCurrentFile() {
+    if (!state.current || state.currentMode !== "text") { status("先打开一个文本文件", true); return; }
+    const ext = extOf(state.current);
+    const text = cm.getValue();
+    let result;
+    if (ext === ".css") result = formatCssText(text);
+    else if (/\.(x?html?|htm|xml|opf|ncx|svg)$/i.test(ext)) result = formatMarkupText(text);
+    else { status("当前文件类型暂不支持格式化：" + ext, true); return; }
+    if (!result.ok) { status(result.error, true); return; }
+    if (result.text === text) { status("当前文件已经是格式化状态"); return; }
+    const cursor = cm.getCursor();
+    cm.replaceRange(result.text, { line: 0, ch: 0 }, { line: cm.lastLine(), ch: cm.getLine(cm.lastLine()).length });
+    cm.setCursor(Math.min(cursor.line, cm.lastLine()), 0);
+    status("已格式化 " + state.current + "，可 Ctrl+Z 撤销");
+  }
+  function goToLine() {
+    const line = prompt("跳到行号（1 - " + (cm.lineCount()) + "）", String(cm.getCursor().line + 1));
+    if (line == null) return;
+    const n = Math.max(1, Math.min(cm.lineCount(), parseInt(line, 10) || 1));
+    cm.setCursor({ line: n - 1, ch: 0 }); cm.scrollIntoView({ line: n - 1, ch: 0 }, 60); cm.focus();
+  }
+  function moveLine(delta) {
+    const cur = cm.getCursor();
+    const target = cur.line + delta;
+    if (target < 0 || target >= cm.lineCount()) return;
+    const lineText = cm.getLine(cur.line), targetText = cm.getLine(target);
+    cm.operation(() => {
+      cm.replaceRange(targetText, { line: cur.line, ch: 0 }, { line: cur.line, ch: lineText.length });
+      cm.replaceRange(lineText, { line: target, ch: 0 }, { line: target, ch: targetText.length });
+      cm.setCursor({ line: target, ch: cur.ch });
+    });
+  }
+  function duplicateLine() {
+    const cur = cm.getCursor();
+    const line = cm.getLine(cur.line);
+    cm.replaceRange("\n" + line, { line: cur.line, ch: line.length });
+    cm.setCursor({ line: cur.line + 1, ch: cur.ch });
+  }
+
   function initEditor() {
     cm = CodeMirror.fromTextArea($("code"), {
       lineNumbers: true, mode: "htmlmixed", lineWrapping: false, indentUnit: 2,
       viewportMargin: 40, autoCloseBrackets: true, matchBrackets: true,
-      extraKeys: { "Ctrl-/": toggleEpubComment, "Cmd-/": toggleEpubComment },
+      extraKeys: {
+        "Ctrl-/": toggleEpubComment, "Cmd-/": toggleEpubComment,
+        "Shift-Alt-F": formatCurrentFile, "Ctrl-G": goToLine,
+        "Alt-Up": () => moveLine(-1), "Alt-Down": () => moveLine(1), "Shift-Alt-D": duplicateLine,
+      },
     });
     cm.on("cursorActivity", () => {
       const p = cm.getCursor();

@@ -311,3 +311,6 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .follow-reader{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:10.5px;cursor:pointer;white-space:nowrap;padding:0 3px}
 .follow-reader input{accent-color:var(--accent);margin:0}
 .follow-reader:has(input:disabled){opacity:.4;cursor:default}
+
+/* ===== 格式化 ===== */
+#formatBtn{white-space:nowrap}

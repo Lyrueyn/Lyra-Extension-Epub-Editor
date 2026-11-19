@@ -317,6 +317,9 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .follow-reader input{accent-color:var(--accent);margin:0}
 .follow-reader:has(input:disabled){opacity:.4;cursor:default}
 
+/* ===== 格式化 ===== */
+#formatBtn{white-space:nowrap}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -329,6 +332,7 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   <button id="outlineBtn" title="章节与目录">目录</button>
   <button id="globalFindBtn" title="全书搜索与替换 (Ctrl+Shift+F)">全书</button>
   <button id="wrapBtn" title="软换行 (Alt+Z)">换行</button>
+  <button id="formatBtn" title="格式化当前文件 (Shift+Alt+F)">格式化</button>
   <button id="metaBtn" title="书籍元数据">信息</button>
   <button id="assetsBtn" title="图片与封面">资源</button>
   <span id="bookName" class="book-name">未打开 EPUB</span>
@@ -467,5 +471,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.20"></script>
+<script src="app.js?v=1.0.21"></script>
 </body></html>
