@@ -16,10 +16,17 @@
     edits: new Map(), suppressChange: false, previewTarget: "", previewTimer: 0,
     previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
     deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
-    validation: null,
+    validation: null, wrap: true,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
+  function applyWrap(on) {
+    state.wrap = !!on;
+    if (cm) cm.setOption("lineWrapping", state.wrap);
+    const btn = $("wrapBtn");
+    if (btn) btn.classList.toggle("active", state.wrap);
+    try { localStorage.setItem("lyra.epubEditor.wrap", state.wrap ? "1" : "0"); } catch { }
+  }
   function applyTheme(name) {
     const theme = THEMES.includes(name) ? name : "lyra";
     document.documentElement.dataset.theme = theme;
@@ -1025,6 +1032,68 @@
   }
   function closeGlobalFind() { $("globalFindOverlay").hidden = true; }
 
+  // ---------- 书籍元数据 ----------
+  const DC_NS = "http://purl.org/dc/elements/1.1/";
+  function dcGet(metadata, tag) {
+    let el = metadata.getElementsByTagNameNS(DC_NS, tag)[0];
+    if (!el) el = metadata.getElementsByTagName("dc:" + tag)[0];
+    if (!el) el = metadata.getElementsByTagName(tag)[0];
+    return el || null;
+  }
+  function dcSet(doc, metadata, tag, value, removeEmpty) {
+    let el = dcGet(metadata, tag);
+    if (!el) {
+      if (removeEmpty && !value) return;
+      el = doc.createElementNS(DC_NS, "dc:" + tag);
+      metadata.appendChild(el);
+    }
+    el.textContent = value || "";
+  }
+  async function openMetadata() {
+    if (!state.zip) return;
+    const opfPath = await findOpfPath();
+    if (!opfPath) { status("没有找到 OPF", true); return; }
+    const opfText = await entryText(opfPath);
+    const doc = new DOMParser().parseFromString(opfText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) { status("OPF XML 不合法，无法编辑元数据", true); return; }
+    const metadata = doc.getElementsByTagName("metadata")[0];
+    if (!metadata) { status("OPF 没有 metadata", true); return; }
+    const field = (tag) => { const el = dcGet(metadata, tag); return el ? (el.textContent || "").trim() : ""; };
+    $("metaTitle").value = field("title");
+    $("metaCreator").value = field("creator");
+    $("metaLanguage").value = field("language");
+    $("metaPublisher").value = field("publisher");
+    $("metaDate").value = field("date");
+    $("metaIdentifier").value = field("identifier");
+    $("metaDescription").value = field("description");
+    $("metaFile").textContent = opfPath;
+    $("metaOverlay").hidden = false;
+    $("metaTitle").focus();
+  }
+  function closeMetadata() { $("metaOverlay").hidden = true; }
+  async function applyMetadata() {
+    const opfPath = await findOpfPath();
+    if (!opfPath) return;
+    const opfText = await entryText(opfPath);
+    const doc = new DOMParser().parseFromString(opfText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) { status("OPF XML 不合法", true); return; }
+    const metadata = doc.getElementsByTagName("metadata")[0];
+    if (!metadata) { status("OPF 没有 metadata", true); return; }
+    dcSet(doc, metadata, "title", $("metaTitle").value.trim());
+    dcSet(doc, metadata, "creator", $("metaCreator").value.trim(), true);
+    dcSet(doc, metadata, "language", $("metaLanguage").value.trim(), true);
+    dcSet(doc, metadata, "publisher", $("metaPublisher").value.trim(), true);
+    dcSet(doc, metadata, "date", $("metaDate").value.trim(), true);
+    dcSet(doc, metadata, "identifier", $("metaIdentifier").value.trim(), true);
+    dcSet(doc, metadata, "description", $("metaDescription").value.trim(), true);
+    let next = new XMLSerializer().serializeToString(doc);
+    if (/^<\?xml/i.test(opfText) && !/^<\?xml/i.test(next)) next = '<?xml version="1.0" encoding="utf-8"?>\n' + next;
+    markEntryEdited(opfPath, next);
+    closeMetadata();
+    status("书籍信息已应用，保存后写入 OPF");
+    scheduleDraftSave();
+  }
+
   async function saveBook() {
     if (!state.zip) return;
     if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
@@ -1269,6 +1338,8 @@
     } catch { }
     updatePreviewControls();
     $("themeSelect").addEventListener("change", () => applyTheme($("themeSelect").value));
+    try { applyWrap(localStorage.getItem("lyra.epubEditor.wrap") !== "0"); } catch { applyWrap(true); }
+    $("wrapBtn").addEventListener("click", () => applyWrap(!state.wrap));
     try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());
     if (EMBEDDED) {
@@ -1284,6 +1355,9 @@
     $("validateBtn").addEventListener("click", () => runValidationManual().catch((e) => status(e.message, true)));
     $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));
     $("globalFindBtn").addEventListener("click", () => openGlobalFind());
+    $("metaBtn").addEventListener("click", () => openMetadata().catch((e) => status(e.message, true)));
+    $("metaCancel").addEventListener("click", closeMetadata);
+    $("metaApply").addEventListener("click", () => applyMetadata().catch((e) => status(e.message, true)));
     $("gfSearch").addEventListener("click", () => runGlobalSearch().catch((e) => status(e.message, true)));
     $("gfReplaceAll").addEventListener("click", () => replaceAllGlobal().catch((e) => status(e.message, true)));
     $("gfClose").addEventListener("click", closeGlobalFind);
@@ -1315,6 +1389,7 @@
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("metaOverlay").hidden) { closeMetadata(); return; }
       if (event.key === "Escape" && !$("globalFindOverlay").hidden) { closeGlobalFind(); return; }
       if (event.key === "Escape" && !$("outlineOverlay").hidden) { closeOutline(); return; }
       if (event.key === "Escape" && !$("validateOverlay").hidden) { closeValidation(); return; }
@@ -1322,6 +1397,8 @@
         const tag = (event.target && event.target.tagName || "").toLowerCase();
         if (!/input|textarea|select/.test(tag)) { event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return; }
       }
+      if (event.altKey && event.key.toLowerCase() === "z") { event.preventDefault(); applyWrap(!state.wrap); return; }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "m") { event.preventDefault(); openMetadata().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") { event.preventDefault(); openGlobalFind(); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); openOutline().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
@@ -1379,6 +1456,7 @@
       const el = $("cursorInfo");
       if (el) el.textContent = "Ln " + (p.line + 1) + ", Col " + (p.ch + 1);
     });
+    applyWrap(state.wrap);
     cm.on("change", () => {
       if (state.suppressChange || !state.current || state.currentMode !== "text") return;
       state.edits.set(state.current, cm.getValue());

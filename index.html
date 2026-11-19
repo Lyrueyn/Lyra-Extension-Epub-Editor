@@ -236,6 +236,24 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .gf-snippet mark{background:color-mix(in srgb,var(--accent) 28%,transparent);color:var(--accent);border-radius:2px;padding:0 1px}
 .gf-empty{padding:28px;text-align:center;color:var(--muted);font-size:12px}
 
+/* ===== 软换行 ===== */
+#wrapBtn.active{background:color-mix(in srgb,var(--accent) 16%,var(--panel-2));border-color:var(--accent);color:var(--accent);font-weight:600}
+
+/* ===== 书籍元数据 ===== */
+.meta-overlay{position:fixed;inset:0;z-index:294;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);padding:24px}
+.meta-overlay[hidden]{display:none !important}
+.meta-card{width:min(620px,100%);max-height:86vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.meta-head{display:flex;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.meta-file{margin-left:auto;color:var(--muted);font:10px/1 Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
+.meta-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;padding:14px 16px;overflow:auto}
+.meta-fields label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:11px}
+.meta-fields label.wide{grid-column:1 / -1}
+.meta-fields input,.meta-fields textarea{border:1px solid var(--border);border-radius:7px;background:var(--bg-deep);color:var(--text);padding:6px 8px;font:12px/1.5 "Segoe UI",system-ui;outline:none;resize:vertical}
+.meta-fields input:focus,.meta-fields textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
+.meta-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--bar)}
+.meta-actions button{height:30px;padding:0 14px;border-radius:7px;font-size:12px}
+.meta-actions .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--accent-ink);font-weight:600}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -247,6 +265,8 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   <button id="validateBtn" title="检查 EPUB 结构">检查</button>
   <button id="outlineBtn" title="章节与目录">目录</button>
   <button id="globalFindBtn" title="全书搜索与替换 (Ctrl+Shift+F)">全书</button>
+  <button id="wrapBtn" title="软换行 (Alt+Z)">换行</button>
+  <button id="metaBtn" title="书籍元数据">信息</button>
   <span id="bookName" class="book-name">未打开 EPUB</span>
   <span id="dirtyBadge" class="dirty" hidden>未保存</span>
   <select id="themeSelect" class="theme-select" title="界面主题">
@@ -308,6 +328,21 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
   </section>
 </div>
 <div id="empty" class="empty" hidden><div>把 EPUB 拖到这里，或从阅读器打开</div></div>
+<div id="metaOverlay" class="meta-overlay" hidden>
+  <div class="meta-card">
+    <div class="meta-head"><span>书籍信息</span><span id="metaFile" class="meta-file"></span></div>
+    <div class="meta-fields">
+      <label>书名<input id="metaTitle" type="text" spellcheck="false"></label>
+      <label>作者<input id="metaCreator" type="text" spellcheck="false"></label>
+      <label>语言<input id="metaLanguage" type="text" spellcheck="false" placeholder="例如 zh-CN"></label>
+      <label>出版者<input id="metaPublisher" type="text" spellcheck="false"></label>
+      <label>日期<input id="metaDate" type="text" spellcheck="false" placeholder="YYYY-MM-DD"></label>
+      <label>标识符<input id="metaIdentifier" type="text" spellcheck="false"></label>
+      <label class="wide">简介<textarea id="metaDescription" rows="4" spellcheck="false"></textarea></label>
+    </div>
+    <div class="meta-actions"><button id="metaCancel" type="button">取消</button><button id="metaApply" type="button" class="primary">应用</button></div>
+  </div>
+</div>
 <div id="globalFindOverlay" class="global-find-overlay" hidden>
   <div class="global-find-card">
     <div class="global-find-head"><span>全书搜索与替换</span><span id="globalFindCount" class="gf-count"></span></div>
@@ -347,5 +382,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.13"></script>
+<script src="app.js?v=1.0.14"></script>
 </body></html>
