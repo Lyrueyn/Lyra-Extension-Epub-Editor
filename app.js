@@ -1094,6 +1094,130 @@
     scheduleDraftSave();
   }
 
+  // ---------- 图片资源 / 封面 ----------
+  let assetSelected = "";
+  function imageFiles() {
+    return listFiles().filter((f) => /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(f) && !/\.bak$/i.test(f));
+  }
+  async function renderAssets() {
+    const grid = $("assetsGrid"); grid.innerHTML = "";
+    const files = imageFiles();
+    $("assetsCount").textContent = files.length + " 张图片";
+    if (!files.length) { const e = document.createElement("div"); e.className = "assets-empty"; e.textContent = "这本书里没有图片。可以点「导入图片」添加。"; grid.appendChild(e); }
+    for (const rel of files) {
+      const card = document.createElement("div"); card.className = "asset-card" + (rel === assetSelected ? " selected" : "");
+      const thumb = document.createElement("div"); thumb.className = "asset-thumb";
+      try {
+        const url = await blobUrlFor(rel);
+        if (url) { const img = document.createElement("img"); img.src = url; img.alt = ""; img.loading = "lazy"; thumb.appendChild(img); }
+      } catch { }
+      const name = document.createElement("div"); name.className = "asset-name"; name.textContent = rel;
+      const size = document.createElement("small"); size.textContent = extOf(rel).toUpperCase().replace(".", "");
+      name.appendChild(size);
+      card.appendChild(thumb); card.appendChild(name);
+      card.addEventListener("click", () => { assetSelected = rel; renderAssets().catch(() => { }); });
+      grid.appendChild(card);
+    }
+    $("assetInsert").disabled = !assetSelected;
+    $("assetCover").disabled = !assetSelected;
+  }
+  async function openAssets() {
+    if (!state.zip) return;
+    assetSelected = "";
+    $("assetsOverlay").hidden = false;
+    await renderAssets();
+  }
+  function closeAssets() { $("assetsOverlay").hidden = true; }
+  async function insertAsset() {
+    if (!assetSelected) { status("先选择一张图片", true); return; }
+    if (!state.current) { status("先打开一个章节", true); return; }
+    const rel = relativeHref(dirOf(state.current), assetSelected);
+    const name = baseName(assetSelected);
+    if (isHtmlFile(state.current)) {
+      cm.replaceSelection('\n<img src="' + rel + '" alt="' + xmlEscape(name) + '" />\n');
+    } else if (extOf(state.current) === ".css") {
+      cm.replaceSelection('url("' + rel + '")');
+    } else {
+      status("当前文件不是 HTML/CSS，无法插入图片", true); return;
+    }
+    closeAssets();
+    status("已插入图片：" + rel);
+  }
+  async function setAssetCover() {
+    if (!assetSelected) { status("先选择一张图片", true); return; }
+    const opfPath = await findOpfPath();
+    if (!opfPath) { status("没有找到 OPF", true); return; }
+    const opfText = await entryText(opfPath);
+    const doc = new DOMParser().parseFromString(opfText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) { status("OPF XML 不合法", true); return; }
+    const manifest = doc.getElementsByTagName("manifest")[0];
+    const metadata = doc.getElementsByTagName("metadata")[0];
+    if (!manifest) { status("OPF 没有 manifest", true); return; }
+    const ns = doc.documentElement.namespaceURI || "http://www.idpf.org/2007/opf";
+    const opfDir = dirOf(opfPath);
+    const href = relativeHref(opfDir, assetSelected);
+    let item = null;
+    for (const it of Array.from(manifest.getElementsByTagName("item"))) {
+      const h = it.getAttribute("href") || "";
+      if (resolvePath(opfDir, h.split("#")[0]) === assetSelected) { item = it; break; }
+    }
+    let id = "";
+    if (item) {
+      id = item.getAttribute("id") || "";
+      const props = (item.getAttribute("properties") || "").split(/\s+/).filter(Boolean);
+      if (!props.includes("cover-image")) props.push("cover-image");
+      item.setAttribute("properties", props.join(" "));
+    }
+    if (!id) {
+      let n = 1; do { id = "cover-image" + (n > 1 ? "-" + n : ""); n++; } while (Array.from(manifest.getElementsByTagName("item")).some((x) => x.getAttribute("id") === id));
+      item = doc.createElementNS(ns, "item");
+      item.setAttribute("id", id); item.setAttribute("href", href); item.setAttribute("media-type", mimeFor(assetSelected));
+      item.setAttribute("properties", "cover-image");
+      manifest.appendChild(item);
+    }
+    for (const it of Array.from(manifest.getElementsByTagName("item"))) {
+      if (it !== item) {
+        const props = (it.getAttribute("properties") || "").split(/\s+/).filter((p) => p && p !== "cover-image");
+        if (props.length) it.setAttribute("properties", props.join(" ")); else it.removeAttribute("properties");
+      }
+    }
+    if (metadata) {
+      let meta = null;
+      for (const m of Array.from(metadata.getElementsByTagName("meta"))) if ((m.getAttribute("name") || "").toLowerCase() === "cover") { meta = m; break; }
+      if (!meta) { meta = doc.createElementNS(ns, "meta"); meta.setAttribute("name", "cover"); metadata.appendChild(meta); }
+      meta.setAttribute("content", id);
+    }
+    const guide = doc.getElementsByTagName("guide")[0];
+    if (guide) {
+      let ref = null;
+      for (const r of Array.from(guide.getElementsByTagName("reference"))) if ((r.getAttribute("type") || "").toLowerCase() === "cover") { ref = r; break; }
+      if (!ref) { ref = doc.createElementNS(ns, "reference"); ref.setAttribute("type", "cover"); guide.appendChild(ref); }
+      ref.setAttribute("href", href); ref.setAttribute("title", "Cover");
+    }
+    let next = new XMLSerializer().serializeToString(doc);
+    if (/^<\?xml/i.test(opfText) && !/^<\?xml/i.test(next)) next = '<?xml version="1.0" encoding="utf-8"?>\n' + next;
+    markEntryEdited(opfPath, next);
+    closeAssets();
+    status("封面已设为 " + assetSelected + "，保存后写入 OPF");
+  }
+  async function importAssetFiles(fileList) {
+    if (!fileList || !fileList.length || !state.zip) return;
+    for (const file of Array.from(fileList)) {
+      if (!/^image\//i.test(file.type) && !/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name)) continue;
+      let name = String(file.name || "image").replace(/[\\/:*?"<>|]/g, "_");
+      let rel = "assets/" + name;
+      let n = 2;
+      while (state.zip.file(rel)) { const ext = extOf(name); rel = "assets/" + name.slice(0, name.length - ext.length) + "-" + n + ext; n++; }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      state.zip.file(rel, bytes);
+      state.dirty.add(rel);
+      $("dirtyBadge").hidden = false;
+      refreshDirtyBadge();
+      renderTree();
+      status("已导入 " + rel + "，保存后写入 EPUB");
+    }
+    await renderAssets();
+  }
   async function saveBook() {
     if (!state.zip) return;
     if (!state.dirty.size && !state.deletions.size) { status("没有需要保存的修改"); return; }
@@ -1356,6 +1480,11 @@
     $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));
     $("globalFindBtn").addEventListener("click", () => openGlobalFind());
     $("metaBtn").addEventListener("click", () => openMetadata().catch((e) => status(e.message, true)));
+    $("assetsBtn").addEventListener("click", () => openAssets().catch((e) => status(e.message, true)));
+    $("assetsClose").addEventListener("click", closeAssets);
+    $("assetInsert").addEventListener("click", () => insertAsset().catch((e) => status(e.message, true)));
+    $("assetCover").addEventListener("click", () => setAssetCover().catch((e) => status(e.message, true)));
+    $("assetFiles").addEventListener("change", () => { importAssetFiles($("assetFiles").files).catch((e) => status(e.message, true)); $("assetFiles").value = ""; });
     $("metaCancel").addEventListener("click", closeMetadata);
     $("metaApply").addEventListener("click", () => applyMetadata().catch((e) => status(e.message, true)));
     $("gfSearch").addEventListener("click", () => runGlobalSearch().catch((e) => status(e.message, true)));
@@ -1389,6 +1518,7 @@
     });
     $("reloadBtn").addEventListener("click", () => { if (state.dirty.size && !confirm("有未保存修改，确定重新加载？")) return; loadFromHost(); });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("assetsOverlay").hidden) { closeAssets(); return; }
       if (event.key === "Escape" && !$("metaOverlay").hidden) { closeMetadata(); return; }
       if (event.key === "Escape" && !$("globalFindOverlay").hidden) { closeGlobalFind(); return; }
       if (event.key === "Escape" && !$("outlineOverlay").hidden) { closeOutline(); return; }
@@ -1399,6 +1529,7 @@
       }
       if (event.altKey && event.key.toLowerCase() === "z") { event.preventDefault(); applyWrap(!state.wrap); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "m") { event.preventDefault(); openMetadata().catch((e) => status(e.message, true)); return; }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "i") { event.preventDefault(); openAssets().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") { event.preventDefault(); openGlobalFind(); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); openOutline().catch((e) => status(e.message, true)); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveBook(); return; }
