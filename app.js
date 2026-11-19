@@ -1409,10 +1409,16 @@
     if (idx < 0) { status("当前章节不在 spine 中，无法插入新章节", true); return; }
     const currentId = spine.ids[idx];
     const stem = baseName(state.current).replace(/\.[^.]+$/, "");
-    let newRel = (dirOf(state.current) ? dirOf(state.current) + "/" : "") + stem + "-2" + (extOf(state.current) || ".xhtml");
-    let n = 2;
-    while (state.zip.file(newRel)) { n++; newRel = (dirOf(state.current) ? dirOf(state.current) + "/" : "") + stem + "-" + n + (extOf(state.current) || ".xhtml"); }
-    let newId = (stem + "-2").replace(/[^\w-]/g, "_");
+    // 命名刻意用字母后缀（c1 -> c1b），确保按文件名排序时下半章在上半章之后
+    const dir = dirOf(state.current) ? dirOf(state.current) + "/" : "";
+    const ext = extOf(state.current) || ".xhtml";
+    let suffix = "b";
+    let newRel = dir + stem + suffix + ext;
+    for (let i = 2; state.zip.file(newRel) && i < 200; i++) {
+      suffix = String.fromCharCode(97 + (i % 26)) + (i >= 26 ? String(Math.floor(i / 26)) : "");
+      newRel = dir + stem + suffix + ext;
+    }
+    let newId = (stem + suffix).replace(/[^\w-]/g, "_");
     while (spine.ids.includes(newId)) newId += "_x";
     const newText = replaceHeadTitle(text.slice(0, body.start) + part2 + text.slice(body.end), cleanTitle);
     state.zip.file(newRel, newText);
