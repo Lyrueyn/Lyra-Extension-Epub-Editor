@@ -16,7 +16,8 @@
     edits: new Map(), suppressChange: false, previewTarget: "", previewTimer: 0,
     previewMode: "flow", previewTheme: "sepia", previewFont: 20, previewKind: "html", paged: null,
     deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
-    validation: null, wrap: true, autoSaveMs: 30000, autoSaveTimer: 0,
+    validation: null, wrap: true, autoSaveMs: 5000, autoSaveTimer: 0,
+    cmDocs: new Map(), binaryDoc: null,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
@@ -103,8 +104,18 @@
     state.opfPath = any || "";
     return state.opfPath;
   }
+  function syncDocText(rel, text) {
+    if (!rel || !cm || !state.cmDocs.has(rel)) return;
+    const doc = state.cmDocs.get(rel);
+    if (doc.getValue() === text) return;
+    const oldSuppress = state.suppressChange;
+    state.suppressChange = true;
+    try { doc.setValue(text); } catch { }
+    state.suppressChange = oldSuppress;
+  }
   function markEntryEdited(rel, text) {
     if (!rel) return;
+    syncDocText(rel, text);
     state.edits.set(rel, text);
     state.zip.file(rel, text);
     state.dirty.add(rel);
@@ -325,7 +336,10 @@
       renderTree();
       $("currentFile").textContent = rel;
       $("fileMode").textContent = extOf(rel) + " · 二进制";
-      cm.setValue("");
+      if (!state.binaryDoc) state.binaryDoc = CodeMirror.Doc("", "");
+      state.suppressChange = true;
+      if (cm.getDoc() !== state.binaryDoc) cm.swapDoc(state.binaryDoc);
+      state.suppressChange = false;
       cm.setOption("readOnly", true);
       $("saveBtn").disabled = !state.zip;
       status("二进制文件，不支持源码编辑：" + rel);
@@ -340,11 +354,12 @@
     $("currentFile").textContent = rel;
     $("fileMode").textContent = modeFor(rel) || "text";
     cm.setOption("readOnly", false);
+    let doc = state.cmDocs.get(rel);
+    if (!doc) { doc = CodeMirror.Doc(text, modeFor(rel)); state.cmDocs.set(rel, doc); }
     state.suppressChange = true;
-    cm.setValue(text);
+    if (cm.getDoc() !== doc) cm.swapDoc(doc);
     state.suppressChange = false;
     cm.setOption("mode", modeFor(rel));
-    cm.clearHistory();
     $("saveBtn").disabled = !state.zip;
     updateChapterButtons();
     const previewRel = (extOf(rel) === ".css" && state.previewTarget && state.zip.file(state.previewTarget)) ? state.previewTarget : rel;
@@ -570,6 +585,7 @@
     clearInterval(state.loadPoller);
     clearTimeout(state.autoSaveTimer);
     state.dirty.clear(); state.current = ""; state.edits.clear(); state.previewTarget = ""; state.deletions.clear(); state.opfPath = "";
+    state.cmDocs.clear(); state.binaryDoc = null;
     state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
     state.blobCache.clear();
     $("bookName").textContent = state.name + (state.path && state.path !== state.name ? "  ·  " + state.path : "");
@@ -702,25 +718,50 @@
     return issues;
   }
   function closeValidation() { $("validateOverlay").hidden = true; state.validation = null; }
-  function showValidation(issues, onSave) {
-    state.validation = { issues, onSave };
-    const list = $("validateList"); list.innerHTML = "";
+  function renderValidationView() {
+    const data = state.validation;
+    if (!data) return;
+    const issues = data.issues;
+    const list = $("validateList");
+    list.innerHTML = "";
     const errors = issues.filter((x) => x.level === "error").length;
     const warns = issues.filter((x) => x.level === "warn").length;
     $("validateCount").textContent = errors + " 个错误 · " + warns + " 个警告";
-    if (!issues.length) { const d = document.createElement("div"); d.className = "validate-empty"; d.textContent = "检查通过，没有发现结构问题。"; list.appendChild(d); }
-    for (const x of issues) {
-      const row = document.createElement("div"); row.className = "validate-row " + (x.level === "error" ? "error" : "warn");
-      const sev = document.createElement("span"); sev.className = "sev"; sev.textContent = x.level === "error" ? "!" : "?";
-      const msg = document.createElement("div"); msg.className = "msg"; msg.textContent = x.msg;
-      if (x.file) { const f = document.createElement("span"); f.className = "file"; f.textContent = x.file; msg.appendChild(f); }
-      row.appendChild(sev); row.appendChild(msg); list.appendChild(row);
+    const summary = document.createElement("div");
+    summary.className = "validate-summary";
+    const ec = document.createElement("div"); ec.className = "vs-card error"; ec.innerHTML = '<b>' + errors + '</b><span>错误</span>';
+    const wc = document.createElement("div"); wc.className = "vs-card warn"; wc.innerHTML = '<b>' + warns + '</b><span>警告</span>';
+    const tip = document.createElement("div"); tip.className = "vs-tip"; tip.textContent = errors ? "错误必须处理，否则不建议保存；警告可以确认后继续。" : "没有错误，只有警告；确认后可以继续保存。";
+    summary.appendChild(ec); summary.appendChild(wc); summary.appendChild(tip); list.appendChild(summary);
+    const filters = document.createElement("div"); filters.className = "validate-filters";
+    for (const [key, label, count] of [["all", "全部", issues.length], ["error", "错误", errors], ["warn", "警告", warns]]) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "validate-filter" + (data.filter === key ? " active" : "");
+      b.textContent = label + " " + count;
+      b.addEventListener("click", () => { if (!state.validation) return; state.validation.filter = key; renderValidationView(); });
+      filters.appendChild(b);
     }
+    list.appendChild(filters);
+    const visible = issues.filter((x) => data.filter === "all" || x.level === data.filter);
+    if (!visible.length) {
+      const d = document.createElement("div"); d.className = "validate-empty"; d.textContent = data.filter === "all" ? "检查通过，没有发现结构问题。" : "这一类没有问题。";
+      list.appendChild(d);
+    }
+    for (const x of visible) {
+      const row = document.createElement("div"); row.className = "validate-row " + (x.level === "error" ? "error" : "warn");
+      const badge = document.createElement("span"); badge.className = "validate-badge " + (x.level === "error" ? "error" : "warn"); badge.textContent = x.level === "error" ? "错误" : "警告";
+      const msg = document.createElement("div"); msg.className = "msg";
+      const txt = document.createElement("div"); txt.className = "validate-msg-text"; txt.textContent = x.msg; msg.appendChild(txt);
+      if (x.file) { const f = document.createElement("div"); f.className = "file"; f.textContent = x.file; msg.appendChild(f); }
+      row.appendChild(badge); row.appendChild(msg); list.appendChild(row);
+    }
+  }
+  function showValidation(issues, onSave) {
+    state.validation = { issues, onSave, filter: "all" };
+    renderValidationView();
     $("validateSave").hidden = !onSave;
     $("validateSave").textContent = onSave ? "仍然保存" : "";
     $("validateCancel").textContent = onSave ? "取消" : "关闭";
     $("validateOverlay").hidden = false;
-    state.validation = { issues, onSave };
   }
   async function runValidationManual() {
     status("正在检查 EPUB 结构…");
@@ -1478,6 +1519,7 @@
     if (!opts.skipConfirm && !confirm("从整本书删除 " + rel + "？\n会尝试同步清理 OPF/目录引用。")) return;
     state.zip.remove(rel);
     state.edits.delete(rel); state.dirty.delete(rel); state.deletions.add(rel);
+    state.cmDocs.delete(rel);
     if (opfPath) {
       const opfText = await entryText(opfPath);
       const opfDir = dirOf(opfPath);
@@ -1646,9 +1688,13 @@
     try { applyWrap(localStorage.getItem("lyra.epubEditor.wrap") !== "0"); } catch { applyWrap(true); }
     try {
       const rawAuto = localStorage.getItem("lyra.epubEditor.autoSave");
-      const savedAuto = rawAuto === null ? 30000 : Number(rawAuto);
-      state.autoSaveMs = Number.isFinite(savedAuto) && savedAuto >= 0 ? savedAuto : 30000;
-    } catch { state.autoSaveMs = 30000; }
+      let savedAuto = rawAuto === null ? 5000 : Number(rawAuto);
+      if (localStorage.getItem("lyra.epubEditor.autoSaveV2") !== "1") {
+        if (!Number.isFinite(savedAuto) || savedAuto >= 10000) savedAuto = 5000;
+        localStorage.setItem("lyra.epubEditor.autoSaveV2", "1");
+      }
+      state.autoSaveMs = Number.isFinite(savedAuto) && savedAuto >= 0 ? savedAuto : 5000;
+    } catch { state.autoSaveMs = 5000; }
     $("autoSaveSelect").value = String(state.autoSaveMs);
     $("autoSaveSelect").addEventListener("change", () => setAutoSave(Number($("autoSaveSelect").value)));
     $("wrapBtn").addEventListener("click", () => applyWrap(!state.wrap));
