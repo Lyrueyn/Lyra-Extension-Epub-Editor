@@ -356,3 +356,10 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .outline-move{display:flex;gap:2px;align-items:center}
 .outline-move button{width:15px;height:18px;padding:0;border:1px solid var(--line);border-radius:3px;background:var(--panel);color:var(--muted);font:8px/1 system-ui;cursor:pointer}
 .outline-move button:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ===== 预览定位菜单 ===== */
+.preview-menu{position:fixed;z-index:320;min-width:180px;padding:5px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);font-size:12px}
+.preview-menu[hidden]{display:none !important}
+.preview-menu-head{padding:5px 8px 6px;color:var(--muted);font-size:10px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.preview-menu button{display:block;width:100%;text-align:left;padding:7px 8px;border:0;border-radius:5px;background:transparent;color:var(--text);font-size:12px;cursor:pointer}
+.preview-menu button:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}

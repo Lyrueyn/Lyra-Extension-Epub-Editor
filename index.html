@@ -362,6 +362,13 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .outline-move button{width:15px;height:18px;padding:0;border:1px solid var(--line);border-radius:3px;background:var(--panel);color:var(--muted);font:8px/1 system-ui;cursor:pointer}
 .outline-move button:hover{border-color:var(--accent);color:var(--accent)}
 
+/* ===== 预览定位菜单 ===== */
+.preview-menu{position:fixed;z-index:320;min-width:180px;padding:5px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);font-size:12px}
+.preview-menu[hidden]{display:none !important}
+.preview-menu-head{padding:5px 8px 6px;color:var(--muted);font-size:10px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.preview-menu button{display:block;width:100%;text-align:left;padding:7px 8px;border:0;border-radius:5px;background:transparent;color:var(--text);font-size:12px;cursor:pointer}
+.preview-menu button:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -447,9 +454,9 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
           <button id="pagedBtn" type="button">分页</button>
         </div>
         <div id="pageNav" class="page-nav" hidden>
-          <button id="pagePrev" type="button" title="上一页 (←)">‹</button>
+          <button id="pagePrev" type="button" title="上一页 (Alt+←)">‹</button>
           <span id="pageLabel">1 / 1</span>
-          <button id="pageNext" type="button" title="下一页 (→)">›</button>
+          <button id="pageNext" type="button" title="下一页 (Alt+→)">›</button>
         </div>
         <label class="follow-reader" title="分页预览直接使用阅读器当前主题、字号、行高和页宽"><input id="followReader" type="checkbox">跟随阅读器</label>
         <select id="previewTheme" class="preview-select" title="阅读主题">
@@ -509,6 +516,11 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
     <div id="gfResults" class="gf-results"></div>
   </div>
 </div>
+<div id="previewMenu" class="preview-menu" hidden>
+  <div class="preview-menu-head">在编辑器中定位</div>
+  <button type="button" data-jump-mode="source">跳到源码位置</button>
+  <button type="button" data-jump-mode="doc">在文档模式中定位</button>
+</div>
 <div id="outlineOverlay" class="outline-overlay" hidden>
   <div class="outline-card">
     <div class="outline-head"><span>章节与目录</span><span id="outlineMeta" class="outline-meta"></span></div>
@@ -533,5 +545,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.24"></script>
+<script src="app.js?v=1.0.25"></script>
 </body></html>

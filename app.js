@@ -585,7 +585,250 @@
     if (state.previewMode !== "paged" || state.previewKind !== "html") { state.paged = null; updatePreviewControls(); return; }
     try { setupPagedPreview(doc); } catch (e) { state.paged = null; }
     updatePreviewControls();
+    schedulePreviewSync();
   }
+  // ---------- 源码 / 文档 / 预览位置同步 ----------
+  let previewSyncTimer = 0;
+  let previewJumpRange = null;
+  let previewJumpPlain = 0;
+  let previewJumpLength = 0;
+  function decodeTextSegment(raw) {
+    if (!raw || raw.indexOf("&") < 0) return raw;
+    const ta = document.createElement("textarea");
+    ta.innerHTML = raw;
+    return ta.value;
+  }
+  function sourcePlainMap(html) {
+    const segments = [];
+    let plain = "";
+    let i = 0;
+    let endLimit = html.length;
+    const bodyOpen = /<body\b[^>]*>/i.exec(html);
+    if (bodyOpen) {
+      i = bodyOpen.index + bodyOpen[0].length;
+      const bodyClose = /<\/body\s*>/i.exec(html);
+      if (bodyClose && bodyClose.index >= i) endLimit = bodyClose.index;
+    }
+    const lower = html.toLowerCase();
+    while (i < endLimit) {
+      if (html[i] === "<") {
+        if (html.startsWith("<!--", i)) { const e = html.indexOf("-->", i + 4); i = e < 0 ? html.length : e + 3; continue; }
+        if (html.startsWith("<![CDATA[", i)) {
+          const e = html.indexOf("]]>", i + 9);
+          const raw = html.slice(i + 9, e < 0 ? html.length : e);
+          if (raw) { segments.push({ srcStart: i + 9, srcEnd: i + 9 + raw.length, plainStart: plain.length, plainEnd: plain.length + raw.length }); plain += raw; }
+          i = e < 0 ? html.length : e + 3; continue;
+        }
+        const end = html.indexOf(">", i);
+        if (end < 0 || end >= endLimit) break;
+        const tag = html.slice(i, end + 1);
+        i = end + 1;
+        if (i > endLimit) { i = endLimit; break; }
+        const skip = /^<(script|style)\b/i.exec(tag);
+        if (skip) {
+          const close = lower.indexOf("</" + skip[1].toLowerCase(), i);
+          if (close >= 0) { const gt = html.indexOf(">", close); i = gt < 0 ? html.length : gt + 1; }
+        }
+        continue;
+      }
+      let next = html.indexOf("<", i);
+      if (next < 0 || next > endLimit) next = endLimit;
+      const raw = html.slice(i, next);
+      const decoded = decodeTextSegment(raw);
+      if (decoded) {
+        segments.push({ srcStart: i, srcEnd: next, plainStart: plain.length, plainEnd: plain.length + decoded.length });
+        plain += decoded;
+      }
+      i = next;
+    }
+    return { plain, segments };
+  }
+  function sourceToPlain(map, sourceIndex) {
+    if (!map || !map.segments.length) return 0;
+    for (const seg of map.segments) {
+      if (sourceIndex >= seg.srcStart && sourceIndex <= seg.srcEnd) return seg.plainStart + Math.min(sourceIndex - seg.srcStart, seg.plainEnd - seg.plainStart);
+    }
+    let prev = null, next = null;
+    for (const seg of map.segments) {
+      if (seg.srcEnd <= sourceIndex) prev = seg;
+      else if (!next) next = seg;
+    }
+    if (next) return next.plainStart;
+    return prev ? prev.plainEnd : 0;
+  }
+  function plainToSource(map, plainOffset) {
+    if (!map || !map.segments.length) return 0;
+    for (const seg of map.segments) {
+      if (plainOffset >= seg.plainStart && plainOffset <= seg.plainEnd) return seg.srcStart + Math.min(plainOffset - seg.plainStart, seg.srcEnd - seg.srcStart);
+    }
+    for (const seg of map.segments) if (seg.plainStart >= plainOffset) return seg.srcStart;
+    const last = map.segments[map.segments.length - 1];
+    return last ? last.srcEnd : 0;
+  }
+  function previewPlainMap(doc, root) {
+    const out = [];
+    let plain = 0;
+    const body = root || (doc && doc.body);
+    if (!doc || !body) return { plain, segments: out };
+    const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const p = node.parentElement;
+        if (p && /^(SCRIPT|STYLE)$/i.test(p.tagName)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    let node;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue ? node.nodeValue.length : 0;
+      if (len) { out.push({ node, start: plain, end: plain + len }); plain += len; }
+    }
+    return { plain, segments: out };
+  }
+  function rangeFromPlain(doc, map, offset) {
+    if (!map || !map.segments.length) return null;
+    let seg = map.segments[map.segments.length - 1];
+    for (const s of map.segments) { if (offset <= s.end) { seg = s; break; } }
+    const local = Math.max(0, Math.min(seg.node.length, offset - seg.start));
+    const r = doc.createRange();
+    r.setStart(seg.node, local); r.setEnd(seg.node, local);
+    return r;
+  }
+  function plainOffsetFromRange(root, range) {
+    try {
+      const doc = root.ownerDocument || range.ownerDocument;
+      const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const p = node.parentElement;
+          if (p && /^(SCRIPT|STYLE)$/i.test(p.tagName)) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      let offset = 0;
+      let node;
+      let first = null;
+      while ((node = walker.nextNode())) {
+        if (!first) first = node;
+        if (node === range.startContainer) return offset + Math.min(range.startOffset, node.length);
+        offset += node.nodeValue ? node.nodeValue.length : 0;
+      }
+      if (range.startContainer === root) return 0;
+      return first ? offset : 0;
+    } catch { return 0; }
+  }
+  function syncPreviewToPlain(offset) {
+    const frame = $("preview");
+    if (!frame || state.previewKind !== "html" || !frame.contentDocument || !frame.contentDocument.body) return;
+    const doc = frame.contentDocument;
+    const map = previewPlainMap(doc);
+    const range = rangeFromPlain(doc, map, offset);
+    if (!range) return;
+    try {
+      if (state.previewMode === "paged" && state.paged) {
+        const p = state.paged;
+        const old = p.page;
+        p.content.style.transform = "none";
+        const rr = range.getBoundingClientRect();
+        const cr = p.content.getBoundingClientRect();
+        const left = rr.left - cr.left;
+        p.content.style.transform = "translateX(" + (-old * (p.pageW + p.gap)) + "px)";
+        const page = Math.max(0, Math.min(p.total - 1, Math.floor((left + 2) / (p.pageW + p.gap))));
+        goPreviewPage(page);
+      } else {
+        const el = range.startContainer.parentElement;
+        if (el) el.scrollIntoView({ block: "center", inline: "nearest" });
+      }
+    } catch { }
+  }
+  function syncPreviewToCursor() {
+    if (!state.zip || !state.current || state.docMode || !isHtmlFile(state.current) || state.previewKind !== "html") return;
+    const map = sourcePlainMap(cm.getValue());
+    syncPreviewToPlain(sourceToPlain(map, cm.indexFromPos(cm.getCursor())));
+  }
+  function schedulePreviewSync() {
+    clearTimeout(previewSyncTimer);
+    previewSyncTimer = setTimeout(() => { try { syncPreviewToCursor(); } catch { } }, 120);
+  }
+  function syncPreviewToDocSelection() {
+    if (!state.docMode || !$("docEditor")) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!$("docEditor").contains(range.startContainer)) return;
+    const offset = plainOffsetFromRange($("docEditor"), range);
+    syncPreviewToPlain(offset);
+  }
+  function scheduleDocPreviewSync() {
+    clearTimeout(previewSyncTimer);
+    previewSyncTimer = setTimeout(() => { try { syncPreviewToDocSelection(); } catch { } }, 120);
+  }
+  async function jumpPreviewTo(mode) {
+    const plain = previewJumpPlain;
+    if (!state.current) return;
+    if (mode === "source") {
+      if (state.docMode) await setEditorMode("source");
+      const text = await entryText(state.current);
+      const smap = sourcePlainMap(text);
+      const index = plainToSource(smap, plain);
+      const endIndex = previewJumpLength ? plainToSource(smap, plain + previewJumpLength) : index;
+      const pos = cm.posFromIndex(Math.max(0, Math.min(text.length, index)));
+      const endPos = cm.posFromIndex(Math.max(0, Math.min(text.length, Math.max(index, endIndex))));
+      cm.setSelection(pos, endPos); cm.scrollIntoView(pos, 80); cm.focus();
+      status("已定位到源码 " + state.current);
+    } else {
+      if (!state.docMode) await setEditorMode("doc");
+      const root = $("docEditor");
+      const map = previewPlainMap(document, root);
+      const startRange = rangeFromPlain(document, map, plain);
+      const endRange = previewJumpLength ? rangeFromPlain(document, map, plain + previewJumpLength) : null;
+      if (startRange) {
+        const range = document.createRange();
+        range.setStart(startRange.startContainer, startRange.startOffset);
+        if (endRange) range.setEnd(endRange.startContainer, endRange.startOffset);
+        else range.setEnd(startRange.startContainer, startRange.startOffset);
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        const el = startRange.startContainer.parentElement;
+        if (el) el.scrollIntoView({ block: "center" });
+      }
+      status("已在文档模式中定位");
+    }
+  }
+  function initPreviewContextMenu() {
+    const frame = $("preview");
+    const menu = $("previewMenu");
+    if (!frame || !menu) return;
+    frame.addEventListener("load", () => {
+      const doc = frame.contentDocument;
+      if (!doc) return;
+      doc.addEventListener("contextmenu", (event) => {
+        const sel = doc.getSelection();
+        if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+        try {
+          previewJumpRange = sel.getRangeAt(0).cloneRange();
+          previewJumpPlain = plainOffsetFromRange(doc.body, previewJumpRange);
+          previewJumpLength = previewJumpRange.toString().length;
+          const rect = frame.getBoundingClientRect();
+          menu.style.left = "0px"; menu.style.top = "0px";
+          menu.hidden = false;
+          const mw = menu.offsetWidth || 190, mh = menu.offsetHeight || 80;
+          const x = Math.max(8, Math.min(window.innerWidth - mw - 8, rect.left + event.clientX));
+          const y = Math.max(8, Math.min(window.innerHeight - mh - 8, rect.top + event.clientY));
+          menu.style.left = x + "px"; menu.style.top = y + "px";
+          event.preventDefault();
+        } catch { }
+      });
+    });
+    document.addEventListener("click", (event) => {
+      if (!menu.contains(event.target)) menu.hidden = true;
+    });
+    menu.addEventListener("click", (event) => {
+      const btn = event.target.closest("button");
+      if (!btn) return;
+      menu.hidden = true;
+      jumpPreviewTo(btn.dataset.jumpMode).catch((e) => status(e.message, true));
+    });
+  }
+
   function rerenderPreview() {
     const rel = currentPreviewRel();
     if (rel) renderPreview(rel).catch(() => { });
@@ -2039,6 +2282,12 @@
 
   function bind() {
     $("preview").addEventListener("load", () => applyPreviewPagination());
+    initPreviewContextMenu();
+    document.addEventListener("selectionchange", () => {
+      if (state.docMode) scheduleDocPreviewSync();
+    });
+    $("docEditor").addEventListener("mouseup", () => scheduleDocPreviewSync());
+    $("docEditor").addEventListener("keyup", () => scheduleDocPreviewSync());
     $("followReader").addEventListener("change", () => {
       state.followReader = $("followReader").checked;
       try { localStorage.setItem("lyra.epubEditor.followReader", state.followReader ? "1" : "0"); } catch { }
@@ -2162,9 +2411,8 @@
       if (event.key === "Escape" && !$("globalFindOverlay").hidden) { closeGlobalFind(); return; }
       if (event.key === "Escape" && !$("outlineOverlay").hidden) { closeOutline(); return; }
       if (event.key === "Escape" && !$("validateOverlay").hidden) { closeValidation(); return; }
-      if (state.previewMode === "paged" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-        const tag = (event.target && event.target.tagName || "").toLowerCase();
-        if (!/input|textarea|select/.test(tag)) { event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return; }
+      if (state.previewMode === "paged" && event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault(); turnPreviewPage(event.key === "ArrowLeft" ? -1 : 1); return;
       }
       if (event.altKey && event.key.toLowerCase() === "z") { event.preventDefault(); applyWrap(!state.wrap); return; }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "m") { event.preventDefault(); openMetadata().catch((e) => status(e.message, true)); return; }
@@ -2387,6 +2635,7 @@
       try { editor.focus(); document.execCommand("defaultParagraphSeparator", false, "p"); } catch { }
       $("cursorInfo").textContent = "文档模式";
       updateModeButtons();
+      schedulePreviewSync();
     } finally { state.docLoading = false; }
   }
   function flushDocEditor(syncSource) {
@@ -2452,6 +2701,7 @@
       const p = cm.getCursor();
       const el = $("cursorInfo");
       if (el) el.textContent = "Ln " + (p.line + 1) + ", Col " + (p.ch + 1);
+      schedulePreviewSync();
     });
     applyWrap(state.wrap);
     cm.on("change", () => {
