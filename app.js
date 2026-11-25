@@ -18,6 +18,7 @@
     deletions: new Set(), opfPath: "", bookHash: "", draftKey: "", draftTimer: 0, saving: false,
     validation: null, wrap: true, autoSaveMs: 5000, autoSaveTimer: 0,
     cmDocs: new Map(), binaryDoc: null, readerPrefs: null, followReader: false,
+    docMode: false, docChapter: "", docBefore: "", docAfter: "", docLoading: false, docLastText: "", docRange: null,
   };
   let cm = null;
   const THEMES = ["lyra", "violet", "emerald", "sunset", "sakura", "light"];
@@ -113,9 +114,9 @@
     try { doc.setValue(text); } catch { }
     state.suppressChange = oldSuppress;
   }
-  function markEntryEdited(rel, text) {
+  function markEntryEdited(rel, text, opts = {}) {
     if (!rel) return;
-    syncDocText(rel, text);
+    if (opts.sync !== false) syncDocText(rel, text);
     state.edits.set(rel, text);
     state.zip.file(rel, text);
     state.dirty.add(rel);
@@ -343,7 +344,9 @@
       cm.setOption("readOnly", true);
       $("saveBtn").disabled = !state.zip;
       status("二进制文件，不支持源码编辑：" + rel);
+      exitDocMode();
       updateChapterButtons();
+      updateModeButtons();
       renderPreview(rel).catch(() => { });
       return;
     }
@@ -362,6 +365,11 @@
     cm.setOption("mode", modeFor(rel));
     $("saveBtn").disabled = !state.zip;
     updateChapterButtons();
+    updateModeButtons();
+    if (state.docMode) {
+      if (isHtmlFile(rel)) await loadDocEditor(rel, text);
+      else exitDocMode();
+    }
     const previewRel = (extOf(rel) === ".css" && state.previewTarget && state.zip.file(state.previewTarget)) ? state.previewTarget : rel;
     renderPreview(previewRel).catch(() => { });
   }
@@ -628,6 +636,7 @@
     clearTimeout(state.autoSaveTimer);
     state.dirty.clear(); state.current = ""; state.edits.clear(); state.previewTarget = ""; state.deletions.clear(); state.opfPath = "";
     state.cmDocs.clear(); state.binaryDoc = null;
+    exitDocMode();
     state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
     state.blobCache.clear();
     $("bookName").textContent = state.name + (state.path && state.path !== state.name ? "  ·  " + state.path : "");
@@ -867,8 +876,10 @@
       state.dirty.clear();
       state.edits.clear();
       state.deletions.clear();
-      state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
-      state.blobCache.clear();
+      if (!state.docMode) {
+        state.blobCache.forEach((url) => { try { URL.revokeObjectURL(url); } catch { } });
+        state.blobCache.clear();
+      }
       if (oldDraftKey) idbDeleteDraft(oldDraftKey);
       state.bookHash = await hashBytes(bytes);
       state.draftKey = draftKeyFor(state.name, bytes, state.bookHash);
@@ -1062,11 +1073,54 @@
     outlineData.rows.forEach((row, index) => {
       const el = document.createElement("div");
       el.className = "outline-row"; el.draggable = true; el.dataset.index = String(index);
-      el.innerHTML = '<span class="outline-handle">⋮⋮</span><span></span><input spellcheck="false"><span class="outline-file"></span>';
+      el.innerHTML = '<span class="outline-handle" title="拖动排序">⋮⋮</span><span class="outline-move"><button type="button" class="outline-up" title="上移">▲</button><button type="button" class="outline-down" title="下移">▼</button></span><input spellcheck="false"><span class="outline-file"></span>';
       const input = el.querySelector("input");
+      const moveBy = (delta) => {
+        if (!outlineData) return;
+        const to = index + delta;
+        if (to < 0 || to >= outlineData.rows.length) return;
+        const [item] = outlineData.rows.splice(index, 1);
+        outlineData.rows.splice(to, 0, item);
+        renderOutlineRows();
+      };
+      el.querySelector(".outline-up").addEventListener("mousedown", (event) => event.stopPropagation());
+      el.querySelector(".outline-down").addEventListener("mousedown", (event) => event.stopPropagation());
+      el.querySelector(".outline-up").addEventListener("click", (event) => { event.stopPropagation(); moveBy(-1); });
+      el.querySelector(".outline-down").addEventListener("click", (event) => { event.stopPropagation(); moveBy(1); });
       input.value = row.title;
       input.placeholder = "章节标题";
       input.addEventListener("input", () => { row.title = input.value; });
+      const handle = el.querySelector(".outline-handle");
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const from = index;
+        let target = from;
+        const clear = () => document.querySelectorAll(".outline-row").forEach((x) => x.classList.remove("drag-over", "dragging"));
+        el.classList.add("dragging");
+        const onMove = (ev) => {
+          const under = document.elementFromPoint(ev.clientX, ev.clientY);
+          const rowEl = under && under.closest ? under.closest(".outline-row") : null;
+          if (!rowEl) return;
+          const idx = Number(rowEl.dataset.index);
+          if (!Number.isInteger(idx)) return;
+          target = idx;
+          document.querySelectorAll(".outline-row").forEach((x) => x.classList.remove("drag-over"));
+          rowEl.classList.add("drag-over");
+        };
+        const onUp = () => {
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup", onUp);
+          clear();
+          if (outlineData && target !== from && target >= 0 && target < outlineData.rows.length) {
+            const [item] = outlineData.rows.splice(from, 1);
+            outlineData.rows.splice(target, 0, item);
+            renderOutlineRows();
+          }
+        };
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+      });
       el.querySelector(".outline-file").textContent = row.target || row.idref;
       el.querySelector(".outline-file").title = row.target || row.idref;
       el.addEventListener("dragstart", (event) => {
@@ -1493,6 +1547,10 @@
   async function openAssets() {
     if (!state.zip) return;
     assetSelected = "";
+    state.docRange = null;
+    if (state.docMode) {
+      try { const sel = window.getSelection(); if (sel && sel.rangeCount) state.docRange = sel.getRangeAt(0).cloneRange(); } catch { }
+    }
     $("assetsOverlay").hidden = false;
     await renderAssets();
   }
@@ -1502,6 +1560,19 @@
     if (!state.current) { status("先打开一个章节", true); return; }
     const rel = relativeHref(dirOf(state.current), assetSelected);
     const name = baseName(assetSelected);
+    if (state.docMode && isHtmlFile(state.current)) {
+      try {
+        const url = await blobUrlFor(assetSelected);
+        const sel = window.getSelection();
+        if (state.docRange && sel) { sel.removeAllRanges(); sel.addRange(state.docRange); }
+        $("docEditor").focus();
+        document.execCommand("insertHTML", false, '<img src="' + (url || rel) + '" data-orig-src="' + xmlEscape(rel) + '" alt="' + xmlEscape(name) + '" />');
+        flushDocEditor(false);
+        closeAssets();
+        status("已插入图片：" + rel);
+      } catch (e) { status("插入图片失败：" + (e && e.message ? e.message : e), true); }
+      return;
+    }
     if (isHtmlFile(state.current)) {
       cm.replaceSelection('\n<img src="' + rel + '" alt="' + xmlEscape(name) + '" />\n');
     } else if (extOf(state.current) === ".css") {
@@ -2001,7 +2072,10 @@
     $("autoSaveSelect").value = String(state.autoSaveMs);
     $("autoSaveSelect").addEventListener("change", () => setAutoSave(Number($("autoSaveSelect").value)));
     $("wrapBtn").addEventListener("click", () => applyWrap(!state.wrap));
-    $("formatBtn").addEventListener("click", () => formatCurrentFile());
+    $("formatBtn").addEventListener("click", () => {
+      if (state.docMode) { status("文档模式下不能格式化源码，请先切回源码", true); return; }
+      formatCurrentFile();
+    });
     try { applyTheme(localStorage.getItem("lyra.epubEditor.theme") || "lyra"); } catch { applyTheme("lyra"); }
     $("saveBtn").addEventListener("click", () => saveBook());
     if (EMBEDDED) {
@@ -2015,7 +2089,31 @@
     $("newChapterBtn").addEventListener("click", () => createChapter().catch((e) => status(e.message, true)));
     $("splitChapterBtn").addEventListener("click", () => splitChapterAtCursor().catch((e) => status(e.message, true)));
     $("mergeChapterBtn").addEventListener("click", () => mergeNextChapter().catch((e) => status(e.message, true)));
-    $("findBtn").addEventListener("click", () => openFind());
+    $("sourceModeBtn").addEventListener("click", () => setEditorMode("source").catch((e) => status(e.message, true)));
+    $("docModeBtn").addEventListener("click", () => setEditorMode("doc").catch((e) => status(e.message, true)));
+    document.querySelector(".doc-toolbar").addEventListener("mousedown", (event) => {
+      if (event.target.closest("button")) event.preventDefault();
+    });
+    document.querySelector(".doc-toolbar").addEventListener("click", (event) => {
+      const btn = event.target.closest("button");
+      if (!btn) return;
+      $("docEditor").focus();
+      if (btn.dataset.docCmd) { try { document.execCommand(btn.dataset.docCmd, false, null); } catch { } }
+      else if (btn.dataset.docBlock) { try { document.execCommand("formatBlock", false, "<" + btn.dataset.docBlock + ">"); } catch { } }
+      flushDocEditor(false);
+    });
+    $("docEditor").addEventListener("input", () => {
+      if (state.docLoading) return;
+      flushDocEditor(false);
+    });
+    $("docEditor").addEventListener("click", (event) => {
+      const a = event.target.closest && event.target.closest("a");
+      if (a) event.preventDefault();
+    });
+    $("findBtn").addEventListener("click", () => {
+      if (state.docMode) { setEditorMode("source").then(() => openFind()).catch((e) => status(e.message, true)); return; }
+      openFind();
+    });
     $("validateBtn").addEventListener("click", () => runValidationManual().catch((e) => status(e.message, true)));
     $("outlineBtn").addEventListener("click", () => openOutline().catch((e) => status(e.message, true)));
     $("globalFindBtn").addEventListener("click", () => openGlobalFind());
@@ -2240,6 +2338,104 @@
     const line = cm.getLine(cur.line);
     cm.replaceRange("\n" + line, { line: cur.line, ch: line.length });
     cm.setCursor({ line: cur.line + 1, ch: cur.ch });
+  }
+
+  // ---------- 文档模式（所见即所得正文编辑） ----------
+  function docClean(root) {
+    for (const el of Array.from(root.querySelectorAll("script,iframe,object,embed,style,link,form"))) el.remove();
+    for (const el of Array.from(root.querySelectorAll("*"))) {
+      for (const attr of Array.from(el.attributes)) {
+        if (/^on/i.test(attr.name) || attr.name === "contenteditable") el.removeAttribute(attr.name);
+      }
+    }
+  }
+  function updateModeButtons() {
+    if (!$("docModeBtn")) return;
+    const canDoc = !!state.current && state.currentMode === "text" && isHtmlFile(state.current);
+    $("docModeBtn").disabled = !canDoc;
+    $("sourceModeBtn").classList.toggle("active", !state.docMode);
+    $("docModeBtn").classList.toggle("active", state.docMode);
+    if (!state.docMode && $("cursorInfo") && state.currentMode === "text") { /* 源码光标由 cursorActivity 更新 */ }
+  }
+  async function loadDocEditor(rel, text) {
+    if (!isHtmlFile(rel)) return;
+    state.docLoading = true;
+    try {
+      const body = chapterBodyParts(text);
+      if (!body) { exitDocMode(); status("章节缺少 <body>，无法进入文档模式", true); return; }
+      state.docChapter = rel;
+      state.docBefore = text.slice(0, body.start);
+      state.docAfter = text.slice(body.end);
+      state.docLastText = text;
+      const parsed = new DOMParser().parseFromString(text, "text/html");
+      const root = parsed.body;
+      for (const img of Array.from(root.querySelectorAll("img"))) {
+        const raw = img.getAttribute("src") || "";
+        if (!raw) continue;
+        const target = resolvePath(dirOf(rel), raw.split("#")[0].split("?")[0]);
+        if (target && state.zip.file(target)) {
+          try {
+            const url = await blobUrlFor(target);
+            if (url) { img.setAttribute("data-orig-src", raw); img.setAttribute("src", url); }
+          } catch { }
+        }
+      }
+      docClean(root);
+      const editor = $("docEditor");
+      editor.innerHTML = root.innerHTML;
+      state.docLoading = false;
+      try { editor.focus(); document.execCommand("defaultParagraphSeparator", false, "p"); } catch { }
+      $("cursorInfo").textContent = "文档模式";
+      updateModeButtons();
+    } finally { state.docLoading = false; }
+  }
+  function flushDocEditor(syncSource) {
+    if (!state.docMode || state.docLoading || !state.docChapter) return;
+    const editor = $("docEditor");
+    const clone = editor.cloneNode(true);
+    for (const img of Array.from(clone.querySelectorAll("img[data-orig-src]"))) {
+      img.setAttribute("src", img.getAttribute("data-orig-src") || "");
+      img.removeAttribute("data-orig-src");
+    }
+    for (const el of Array.from(clone.querySelectorAll("[contenteditable]"))) el.removeAttribute("contenteditable");
+    docClean(clone);
+    let inner = clone.innerHTML;
+    // XHTML 要求 void 元素闭合
+    inner = inner.replace(/<(br|hr|img|input|meta|link)\b([^>]*?)\s*\/?>/gi, (m, tag, attrs) => "<" + tag + attrs.replace(/\s*\/\s*$/, "").trimEnd() + " />");
+    const text = state.docBefore + inner + state.docAfter;
+    if (text === state.docLastText) {
+      if (syncSource) syncDocText(state.docChapter, text);
+      return;
+    }
+    state.docLastText = text;
+    markEntryEdited(state.docChapter, text, { sync: !!syncSource });
+    schedulePreviewRefresh();
+  }
+  function exitDocMode() {
+    if (!state.docMode) return;
+    state.docMode = false;
+    try { $("sourcePane").classList.remove("doc-mode"); $("docPane").hidden = true; } catch { }
+    updateModeButtons();
+    if (cm) { try { cm.refresh(); } catch { } }
+  }
+  async function setEditorMode(mode) {
+    if (mode === "doc") {
+      if (!state.current || !isHtmlFile(state.current)) { status("文档模式只支持 XHTML/HTML 章节", true); return; }
+      if (state.docMode) return;
+      const text = await entryText(state.current);
+      state.docMode = true;
+      $("sourcePane").classList.add("doc-mode");
+      $("docPane").hidden = false;
+      await loadDocEditor(state.current, text);
+      updateModeButtons();
+      status("文档模式：直接编辑正文，可切换回源码查看 XHTML");
+    } else {
+      if (!state.docMode) return;
+      flushDocEditor(true);
+      exitDocMode();
+      $("cursorInfo").textContent = "Ln " + (cm.getCursor().line + 1) + ", Col " + (cm.getCursor().ch + 1);
+      status("已切换回源码模式");
+    }
   }
 
   function initEditor() {

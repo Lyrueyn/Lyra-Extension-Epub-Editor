@@ -321,3 +321,38 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 .assets-actions .danger{color:#ff8a9c;border-color:color-mix(in srgb,#ff6b86 35%,var(--border));background:color-mix(in srgb,#ff6b86 7%,transparent)}
 .assets-actions .danger:hover:not(:disabled){background:color-mix(in srgb,#ff6b86 14%,transparent)}
 .assets-actions .danger:disabled{opacity:.35;color:var(--muted);border-color:var(--border);background:transparent}
+
+/* ===== 文档模式 / 章节排序 ===== */
+.edit-mode-toggle{display:flex;margin-left:auto;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex:0 0 auto}
+.edit-mode-toggle button{height:22px;padding:0 9px;border:0;border-radius:0;background:var(--panel-2);color:var(--muted);font-size:10px;cursor:pointer}
+.edit-mode-toggle button.active{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.edit-mode-toggle button:disabled{opacity:.35;cursor:default}
+#cursorInfo{margin-left:0}
+.doc-pane{position:absolute;top:40px;left:0;right:0;bottom:0;z-index:8;display:flex;flex-direction:column;background:#ded5c6}
+.doc-pane[hidden]{display:none !important}
+#sourcePane.doc-mode .CodeMirror{display:none !important}
+#sourcePane.doc-mode #findBar{display:none !important}
+.doc-toolbar{flex:0 0 38px;display:flex;align-items:center;gap:4px;padding:0 10px;background:var(--bar);border-bottom:1px solid var(--line);overflow:hidden}
+.doc-toolbar button{height:24px;min-width:26px;padding:0 7px;border:1px solid var(--line);border-radius:5px;background:var(--panel-2);color:var(--text);font-size:10.5px;cursor:pointer}
+.doc-toolbar button:hover{border-color:var(--accent);color:var(--accent)}
+.doc-sep{width:1px;height:16px;background:var(--line);margin:0 3px;flex:0 0 1px}
+.doc-hint{margin-left:auto;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-scroll{flex:1;min-height:0;overflow:auto;padding:22px 20px 60px}
+.doc-editor{width:min(820px,100%);min-height:calc(100vh - 190px);margin:0 auto;background:#fbf7ef;color:#2d2922;border-radius:3px;box-shadow:0 10px 35px rgba(0,0,0,.18);padding:54px 62px 70px;font:17px/1.95 "Noto Serif SC","Source Han Serif SC","Songti SC",serif;outline:none}
+.doc-editor:empty::before{content:"在这里直接写正文…";color:#a89d8c}
+.doc-editor h1,.doc-editor h2,.doc-editor h3{color:#211d17;line-height:1.35;margin:1.1em 0 .55em;font-weight:700}
+.doc-editor h1{font-size:2em}.doc-editor h2{font-size:1.5em}.doc-editor h3{font-size:1.22em}
+.doc-editor p{margin:0 0 1em}
+.doc-editor blockquote{margin:1em 0;padding:.2em 0 .2em 1.1em;border-left:3px solid #c9a86a;color:#6b6254}
+.doc-editor img{max-width:100%;height:auto;display:block;margin:1em auto;border-radius:2px}
+.doc-editor a{color:#8a5a2b;text-decoration:underline}
+.doc-editor ul,.doc-editor ol{margin:0 0 1em;padding-left:1.6em}
+.doc-editor:focus{box-shadow:0 10px 35px rgba(0,0,0,.1),0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
+
+/* 章节排序按钮 / 指针拖动 */
+.outline-row{grid-template-columns:22px 34px minmax(0,1fr) minmax(120px,.65fr)}
+.outline-handle{cursor:grab;touch-action:none}
+.outline-handle:active{cursor:grabbing}
+.outline-move{display:flex;gap:2px;align-items:center}
+.outline-move button{width:15px;height:18px;padding:0;border:1px solid var(--line);border-radius:3px;background:var(--panel);color:var(--muted);font:8px/1 system-ui;cursor:pointer}
+.outline-move button:hover{border-color:var(--accent);color:var(--accent)}
