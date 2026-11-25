@@ -897,6 +897,110 @@
     } catch { }
     return "";
   }
+  // ---------- EPUB2 NCX ----------
+  function findNcxPath(opfText, opfDir) {
+    const items = opfText.match(/<item\b[^>]*\/?>/gi) || [];
+    const tocMatch = opfText.match(/<spine\b[^>]*\btoc=["']([^"']+)["']/i);
+    if (tocMatch) {
+      const id = tocMatch[1];
+      for (const tag of items) {
+        const idm = tag.match(/\bid=["']([^"']+)["']/i);
+        const hm = tag.match(/\bhref=["']([^"']+)["']/i);
+        if (idm && idm[1] === id && hm) return resolvePath(opfDir, hm[1].split("#")[0]);
+      }
+    }
+    for (const tag of items) {
+      const hm = tag.match(/\bhref=["']([^"']+)["']/i);
+      const mm = tag.match(/media-type=["']([^"']+)["']/i);
+      if (hm && ((mm && /dtbncx/i.test(mm[1])) || /\.ncx($|#)/i.test(hm[1]))) return resolvePath(opfDir, hm[1].split("#")[0]);
+    }
+    return "";
+  }
+  function ncxDoc(text) {
+    const doc = new DOMParser().parseFromString(text, "application/xml");
+    return doc.getElementsByTagName("parsererror").length ? null : doc;
+  }
+  function serializeNcx(doc, original) {
+    let out = new XMLSerializer().serializeToString(doc);
+    if (/^<\?xml/i.test(original) && !/^<\?xml/i.test(out)) out = '<?xml version="1.0" encoding="utf-8"?>\n' + out;
+    return out;
+  }
+  function ncxPointTarget(point, dir) {
+    const c = point.getElementsByTagName("content")[0];
+    return c ? resolvePath(dir, (c.getAttribute("src") || "").split("#")[0]) : "";
+  }
+  function ncxPointTitle(point) {
+    const t = point.getElementsByTagName("text")[0];
+    return t ? (t.textContent || "").replace(/\s+/g, " ").trim() : "";
+  }
+  function ncxTitleMap(text, dir) {
+    const map = new Map();
+    const doc = ncxDoc(text);
+    if (!doc) return map;
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) {
+      const target = ncxPointTarget(p, dir);
+      const title = ncxPointTitle(p);
+      if (target && title && !map.has(target)) map.set(target, title);
+    }
+    return map;
+  }
+  function renumberNcx(doc) {
+    let n = 1;
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) p.setAttribute("playOrder", String(n++));
+  }
+  function ncxAddPoint(text, dir, afterTarget, newRel, title) {
+    const doc = ncxDoc(text);
+    if (!doc) return "";
+    const navMap = doc.getElementsByTagName("navMap")[0];
+    if (!navMap) return "";
+    const ns = doc.documentElement.namespaceURI || "";
+    let after = null;
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) if (ncxPointTarget(p, dir) === afterTarget) { after = p; break; }
+    const point = doc.createElementNS(ns, "navPoint");
+    point.setAttribute("id", "navPoint-" + Date.now().toString(36));
+    const label = doc.createElementNS(ns, "navLabel");
+    const t = doc.createElementNS(ns, "text"); t.textContent = title; label.appendChild(t); point.appendChild(label);
+    const content = doc.createElementNS(ns, "content"); content.setAttribute("src", relativeHref(dir, newRel)); point.appendChild(content);
+    let maxOrder = 0;
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) maxOrder = Math.max(maxOrder, parseInt(p.getAttribute("playOrder"), 10) || 0);
+    point.setAttribute("playOrder", String(maxOrder + 1));
+    if (after && after.parentNode) after.parentNode.insertBefore(point, after.nextSibling);
+    else navMap.appendChild(point);
+    renumberNcx(doc);
+    return serializeNcx(doc, text);
+  }
+  function ncxRemovePoint(text, dir, rel) {
+    const doc = ncxDoc(text);
+    if (!doc) return text;
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) {
+      if (ncxPointTarget(p, dir) === rel) { p.parentNode.removeChild(p); renumberNcx(doc); return serializeNcx(doc, text); }
+    }
+    return text;
+  }
+  function ncxApplyOutline(text, dir, rows) {
+    const doc = ncxDoc(text);
+    if (!doc) return text;
+    const navMap = doc.getElementsByTagName("navMap")[0];
+    if (!navMap) return text;
+    const byTarget = new Map();
+    for (const p of Array.from(doc.getElementsByTagName("navPoint"))) {
+      const target = ncxPointTarget(p, dir);
+      if (target && !byTarget.has(target)) byTarget.set(target, p);
+      const row = rows.find((r) => r.target === target);
+      if (row && row.title) {
+        const t = p.getElementsByTagName("text")[0];
+        if (t) t.textContent = row.title;
+      }
+    }
+    const direct = Array.from(navMap.children).filter((x) => x.nodeType === 1 && x.tagName && x.tagName.toLowerCase() === "navpoint");
+    const ordered = [];
+    for (const row of rows) if (byTarget.has(row.target) && direct.includes(byTarget.get(row.target))) ordered.push(byTarget.get(row.target));
+    for (const p of direct) if (!ordered.includes(p)) ordered.push(p);
+    for (const p of ordered) navMap.appendChild(p);
+    renumberNcx(doc);
+    return serializeNcx(doc, text);
+  }
+
   async function readOutlineData() {
     const opfPath = await findOpfPath();
     if (!opfPath) throw new Error("没有找到 package.opf");
@@ -917,6 +1021,9 @@
     const itemrefs = Array.from(spineEl.getElementsByTagName("itemref"));
     const navItem = Array.from(manifest.values()).find((x) => /\bnav\b/i.test(x.properties)) || Array.from(manifest.values()).find((x) => /(?:^|\/)nav\.x?html$/i.test(x.target));
     const navPath = navItem ? navItem.target : "";
+    const ncxPath = findNcxPath(opfText, opfDir);
+    const ncxText = ncxPath && state.zip.file(ncxPath) ? await entryText(ncxPath) : "";
+    const ncxTitles = ncxText ? ncxTitleMap(ncxText, dirOf(ncxPath)) : new Map();
     let navText = navPath && state.zip.file(navPath) ? await entryText(navPath) : "";
     let navDoc = null;
     const navTitles = new Map();
@@ -938,12 +1045,12 @@
       const idref = ref.getAttribute("idref") || "";
       const item = manifest.get(idref);
       const target = item ? item.target : "";
-      let title = navTitles.get(target) || "";
+      let title = navTitles.get(target) || ncxTitles.get(target) || "";
       if (!title && target && state.zip.file(target)) title = outlineTitleFromDoc(await entryText(target));
       if (!title) title = target ? baseName(target) : idref;
       rows.push({ idref, target, title, originalTitle: title });
     }
-    return { opfPath, opfText, opfDir, manifest, rows, navPath, navText, navDoc, navTitles };
+    return { opfPath, opfText, opfDir, manifest, rows, navPath, navText, navDoc, navTitles, ncxPath, ncxText };
   }
   let outlineData = null;
   let outlineDragIndex = -1;
@@ -996,7 +1103,7 @@
   async function applyOutline() {
     if (!outlineData) return;
     try {
-      const { opfPath, opfText, opfDir, rows, navPath, navText, navDoc } = outlineData;
+      const { opfPath, opfText, opfDir, rows, navPath, navText, navDoc, ncxPath, ncxText } = outlineData;
       // 1. spine itemref 顺序
       const spineMatch = opfText.match(/(<spine\b[^>]*>)([\s\S]*?)(<\/spine>)/i);
       if (!spineMatch) throw new Error("OPF 没有可写的 spine");
@@ -1053,6 +1160,13 @@
           let nextNav = serializer.serializeToString(navDoc);
           if (/^<\?xml/i.test(navText) && !/^<\?xml/i.test(nextNav)) nextNav = '<?xml version="1.0" encoding="utf-8"?>\n' + nextNav;
           markEntryEdited(navPath, nextNav);
+        } catch { }
+      }
+      // 4. EPUB2 NCX 标题 + 顶层顺序
+      if (ncxPath && ncxText && state.zip.file(ncxPath)) {
+        try {
+          const nextNcx = ncxApplyOutline(ncxText, dirOf(ncxPath), rows);
+          if (nextNcx && nextNcx !== ncxText) markEntryEdited(ncxPath, nextNcx);
         } catch { }
       }
       closeOutline();
@@ -1426,9 +1540,18 @@
         markEntryEdited(navPath, navText);
       }
     }
+    // EPUB2 NCX
+    try {
+      const ncxPath = findNcxPath(nextOpf, contentDir);
+      if (ncxPath && state.zip.file(ncxPath)) {
+        const ncxText = await entryText(ncxPath);
+        const nextNcx = ncxAddPoint(ncxText, dirOf(ncxPath), "", rel, cleanTitle);
+        if (nextNcx && nextNcx !== ncxText) markEntryEdited(ncxPath, nextNcx);
+      }
+    } catch { }
     await openEntry(rel);
     renderTree();
-    status("已新建章节 " + cleanTitle + "（已加入 OPF 与目录，保存后写入 EPUB）");
+    status("已新建章节 " + cleanTitle + "（已加入 OPF 与目录/NCX，保存后写入 EPUB）");
   }
   function updateChapterButtons() {
     const isHtml = !!state.current && isHtmlFile(state.current);
@@ -1528,6 +1651,15 @@
         if (li) markEntryEdited(navPath, navText.slice(0, li.index) + li[1] + '\n  <li><a href="' + xmlEscape(newNavHref) + '">' + xmlEscape(cleanTitle) + '</a></li>' + navText.slice(li.index + li[1].length));
       }
     }
+    // EPUB2 NCX
+    try {
+      const ncxPath = findNcxPath(nextOpf, opfDir);
+      if (ncxPath && state.zip.file(ncxPath)) {
+        const ncxText = await entryText(ncxPath);
+        const nextNcx = ncxAddPoint(ncxText, dirOf(ncxPath), state.current, newRel, cleanTitle);
+        if (nextNcx && nextNcx !== ncxText) markEntryEdited(ncxPath, nextNcx);
+      }
+    } catch { }
     renderTree();
     updateChapterButtons();
     await openEntry(newRel);
@@ -1584,6 +1716,15 @@
           markEntryEdited(navPath, nextNav);
         }
       }
+      // EPUB2 NCX
+      try {
+        const ncxPath = findNcxPath(nextOpf, opfDir);
+        if (ncxPath && state.zip.file(ncxPath)) {
+          const ncxText = await entryText(ncxPath);
+          const nextNcx = ncxRemovePoint(ncxText, dirOf(ncxPath), rel);
+          if (nextNcx && nextNcx !== ncxText) markEntryEdited(ncxPath, nextNcx);
+        }
+      } catch { }
     }
     refreshDirtyBadge();
     scheduleDraftSave();
