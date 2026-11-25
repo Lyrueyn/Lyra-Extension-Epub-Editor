@@ -314,3 +314,10 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 
 /* ===== 格式化 ===== */
 #formatBtn{white-space:nowrap}
+
+/* ===== 资源引用 / 删除 ===== */
+.assets-info{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.assets-info .used{color:var(--warn,#ffca7a)}
+.assets-actions .danger{color:#ff8a9c;border-color:color-mix(in srgb,#ff6b86 35%,var(--border));background:color-mix(in srgb,#ff6b86 7%,transparent)}
+.assets-actions .danger:hover:not(:disabled){background:color-mix(in srgb,#ff6b86 14%,transparent)}
+.assets-actions .danger:disabled{opacity:.35;color:var(--muted);border-color:var(--border);background:transparent}

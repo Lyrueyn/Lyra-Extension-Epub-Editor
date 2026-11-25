@@ -1351,6 +1351,7 @@
 
   // ---------- 图片资源 / 封面 ----------
   let assetSelected = "";
+  let assetRefs = [];
   function imageFiles() {
     return listFiles().filter((f) => /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(f) && !/\.bak$/i.test(f));
   }
@@ -1375,6 +1376,119 @@
     }
     $("assetInsert").disabled = !assetSelected;
     $("assetCover").disabled = !assetSelected;
+    $("assetDelete").disabled = !assetSelected;
+    updateAssetInfo().catch(() => { });
+  }
+  async function assetReferences(rel) {
+    const refs = [];
+    for (const file of listFiles()) {
+      if (!isTextFile(file) || file === rel) continue;
+      const text = await entryText(file);
+      if (!text) continue;
+      let hit = false;
+      if (isHtmlFile(file)) {
+        const re = /(?:src|href)\s*=\s*["']([^"']+)["']/gi;
+        let m;
+        while ((m = re.exec(text))) {
+          if (resolvePath(dirOf(file), m[1].split("#")[0]) === rel) { hit = true; break; }
+        }
+      } else if (extOf(file) === ".css") {
+        const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+        let m;
+        while ((m = re.exec(text))) {
+          if (resolvePath(dirOf(file), m[2].split("#")[0]) === rel) { hit = true; break; }
+        }
+      } else if (file.endsWith(".opf") || file.endsWith(".ncx") || file.endsWith(".xml")) {
+        if (text.includes(baseName(rel))) hit = true;
+      }
+      if (hit) refs.push(file);
+    }
+    return refs;
+  }
+  async function updateAssetInfo() {
+    const el = $("assetInfo");
+    if (!el) return;
+    if (!assetSelected) { el.textContent = "点击图片卡片选中"; assetRefs = []; return; }
+    el.textContent = "正在检查引用…";
+    assetRefs = await assetReferences(assetSelected);
+    if (!assetSelected) return;
+    if (assetRefs.length) {
+      el.innerHTML = "";
+      const b = document.createElement("span"); b.textContent = assetRefs.length + " 处引用"; b.className = "used";
+      el.appendChild(b);
+      const rest = document.createElement("span"); rest.textContent = " · " + assetRefs.join("、"); el.appendChild(rest);
+    } else {
+      el.textContent = "未被引用";
+    }
+  }
+  async function deleteAsset() {
+    if (!assetSelected) { status("先选择一张图片", true); return; }
+    const rel = assetSelected;
+    const refs = await assetReferences(rel);
+    const message = refs.length
+      ? "删除 " + rel + "？\n\n还有 " + refs.length + " 个文件引用它：\n" + refs.join("\n") + "\n\n删除后这些引用会失效。"
+      : "删除 " + rel + "？\n\n没有被任何章节或 CSS 引用。";
+    if (!confirm(message)) return;
+    state.zip.remove(rel);
+    state.edits.delete(rel);
+    state.dirty.add(rel);
+    state.deletions.add(rel);
+    state.cmDocs.delete(rel);
+    const cached = state.blobCache.get(rel);
+    if (cached) { try { URL.revokeObjectURL(cached); } catch { } state.blobCache.delete(rel); }
+    const opfPath = await findOpfPath();
+    if (opfPath) {
+      const opfText = await entryText(opfPath);
+      const doc = new DOMParser().parseFromString(opfText, "application/xml");
+      if (!doc.getElementsByTagName("parsererror").length) {
+        const opfDir = dirOf(opfPath);
+        const manifest = doc.getElementsByTagName("manifest")[0];
+        let removedId = "";
+        if (manifest) {
+          for (const item of Array.from(manifest.getElementsByTagName("item"))) {
+            const href = item.getAttribute("href") || "";
+            if (resolvePath(opfDir, href.split("#")[0]) === rel) {
+              removedId = item.getAttribute("id") || "";
+              item.parentNode.removeChild(item);
+              break;
+            }
+          }
+        }
+        const spine = doc.getElementsByTagName("spine")[0];
+        if (spine && removedId) {
+          for (const ref of Array.from(spine.getElementsByTagName("itemref"))) {
+            if (ref.getAttribute("idref") === removedId) ref.parentNode.removeChild(ref);
+          }
+        }
+        const metadata = doc.getElementsByTagName("metadata")[0];
+        if (metadata) {
+          for (const meta of Array.from(metadata.getElementsByTagName("meta"))) {
+            if ((meta.getAttribute("name") || "").toLowerCase() === "cover" && (!removedId || meta.getAttribute("content") === removedId)) meta.parentNode.removeChild(meta);
+          }
+        }
+        const guide = doc.getElementsByTagName("guide")[0];
+        if (guide) {
+          for (const ref of Array.from(guide.getElementsByTagName("reference"))) {
+            if (resolvePath(opfDir, (ref.getAttribute("href") || "").split("#")[0]) === rel) ref.parentNode.removeChild(ref);
+          }
+        }
+        let next = new XMLSerializer().serializeToString(doc);
+        if (/^<\?xml/i.test(opfText) && !/^<\?xml/i.test(next)) next = '<?xml version="1.0" encoding="utf-8"?>\n' + next;
+        if (next !== opfText) markEntryEdited(opfPath, next);
+      }
+    }
+    assetSelected = "";
+    assetRefs = [];
+    if (state.current === rel) {
+      const next = listFiles().find((f) => /\.(x?html?|htm)$/i.test(f)) || listFiles()[0];
+      if (next) await openEntry(next);
+    }
+    renderTree();
+    refreshDirtyBadge();
+    scheduleDraftSave();
+    scheduleAutoSave();
+    await renderAssets();
+    status("已删除 " + rel + (refs.length ? "，保存后写入 EPUB；注意引用已失效" : "，保存后写入 EPUB"));
   }
   async function openAssets() {
     if (!state.zip) return;
@@ -1910,6 +2024,7 @@
     $("assetsClose").addEventListener("click", closeAssets);
     $("assetInsert").addEventListener("click", () => insertAsset().catch((e) => status(e.message, true)));
     $("assetCover").addEventListener("click", () => setAssetCover().catch((e) => status(e.message, true)));
+    $("assetDelete").addEventListener("click", () => deleteAsset().catch((e) => status(e.message, true)));
     $("assetFiles").addEventListener("change", () => { importAssetFiles($("assetFiles").files).catch((e) => status(e.message, true)); $("assetFiles").value = ""; });
     $("metaCancel").addEventListener("click", closeMetadata);
     $("metaApply").addEventListener("click", () => applyMetadata().catch((e) => status(e.message, true)));

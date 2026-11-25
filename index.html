@@ -320,6 +320,13 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 /* ===== 格式化 ===== */
 #formatBtn{white-space:nowrap}
 
+/* ===== 资源引用 / 删除 ===== */
+.assets-info{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.assets-info .used{color:var(--warn,#ffca7a)}
+.assets-actions .danger{color:#ff8a9c;border-color:color-mix(in srgb,#ff6b86 35%,var(--border));background:color-mix(in srgb,#ff6b86 7%,transparent)}
+.assets-actions .danger:hover:not(:disabled){background:color-mix(in srgb,#ff6b86 14%,transparent)}
+.assets-actions .danger:disabled{opacity:.35;color:var(--muted);border-color:var(--border);background:transparent}
+
 </style>
 </head><body>
 <header id="topbar">
@@ -411,10 +418,10 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
     <div class="assets-head"><span>图片与封面</span><span id="assetsCount" class="assets-count"></span></div>
     <div class="assets-toolbar">
       <label class="assets-import">导入图片<input id="assetFiles" type="file" accept="image/*" multiple hidden></label>
-      <span class="assets-hint">点击图片卡片选中；插入到当前章节或设为封面</span>
+      <span id="assetInfo" class="assets-info">点击图片卡片选中</span>
     </div>
     <div id="assetsGrid" class="assets-grid"></div>
-    <div class="assets-actions"><button id="assetsClose" type="button">关闭</button><button id="assetInsert" type="button">插入到当前章节</button><button id="assetCover" type="button" class="primary">设为封面</button></div>
+    <div class="assets-actions"><button id="assetDelete" type="button" class="danger">删除图片</button><button id="assetsClose" type="button">关闭</button><button id="assetInsert" type="button">插入到当前章节</button><button id="assetCover" type="button" class="primary">设为封面</button></div>
   </div>
 </div>
 <div id="metaOverlay" class="meta-overlay" hidden>
@@ -471,5 +478,5 @@ html[data-theme="light"] .dirty,html[data-theme="sakura"] .dirty{color:#a15c00;b
 <script src="vendor/codemirror/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="vendor/codemirror/mode/css/css.min.js"></script>
 <script src="vendor/codemirror/mode/javascript/javascript.min.js"></script>
-<script src="app.js?v=1.0.22"></script>
+<script src="app.js?v=1.0.23"></script>
 </body></html>
