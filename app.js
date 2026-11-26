@@ -563,20 +563,8 @@
     const total = Math.max(1, Math.ceil((content.scrollWidth + gap) / (pageW + gap)));
     state.paged = { doc, content, total, page: 0, pageW, pageH, gap };
     goPreviewPage(0);
-    // 只有「几乎不移动、且没有选中文字」的点击才翻页，避免拖选文字时误翻页
-    let downX = 0, downY = 0, downAt = 0;
-    doc.addEventListener("mousedown", (event) => {
-      if (event.button !== 0) return;
-      downX = event.clientX; downY = event.clientY; downAt = Date.now();
-    }, true);
-    doc.addEventListener("click", (event) => {
-      if (event.target.closest("a,button,input,select,textarea")) return;
-      const sel = doc.getSelection();
-      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
-      const moved = Math.abs(event.clientX - downX) + Math.abs(event.clientY - downY);
-      if (moved > 6 || Date.now() - downAt > 900) return;
-      turnPreviewPage(event.clientX < doc.documentElement.clientWidth / 2 ? -1 : 1);
-    }, true);
+    // 预览内点击只用于选中文字/定位，不再通过点击左右区域翻页。
+    // 翻页统一用分页按钮、Alt+←/→，避免选中文字或点击空白时误翻页。
   }
   function goPreviewPage(n) {
     const p = state.paged; if (!p) return;
