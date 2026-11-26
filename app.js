@@ -2483,48 +2483,71 @@
     }, 260);
   }
   // ---------- 源码格式化 / 行编辑 ----------
-  function formatMarkupText(text) {
+  function formatMarkupText(text, ext) {
     if (/<(pre|textarea)\b/i.test(text)) return { ok: false, error: "包含 <pre>/<textarea>，为避免改坏预格式内容，暂不自动格式化" };
     if (/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/i.test(text)) return { ok: false, error: "包含内联 <script>/<style>，暂不自动格式化" };
-    const inline = new Set(["a","abbr","b","bdi","bdo","br","cite","code","data","dfn","em","i","img","kbd","mark","q","rp","rt","ruby","s","samp","small","span","strong","sub","sup","time","u","var","wbr"]);
+    const isHtmlExt = /\.html?$/i.test(ext || "");
+    const isXml = !isHtmlExt;
+    const xmlDecl = (text.match(/^\s*(<\?xml[\s\S]*?\?>)/i) || [])[1] || "";
+    const doctype = (text.match(/<!DOCTYPE[\s\S]*?>/i) || [])[0] || "";
+    const parser = isXml ? "application/xml" : "text/html";
+    const doc = new DOMParser().parseFromString(text, parser);
+    if (isXml && doc.getElementsByTagName("parsererror").length) return { ok: false, error: "XML 解析失败，无法格式化" };
+    const root = doc.documentElement;
+    if (!root) return { ok: false, error: "没有可格式化的根元素" };
+    const inlineTags = new Set(["a","abbr","b","bdi","bdo","br","cite","code","data","dfn","em","i","img","kbd","mark","q","rp","rt","ruby","s","samp","small","span","strong","sub","sup","time","u","var","wbr"]);
     const voidTags = new Set(["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"]);
-    const re = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<\/?[A-Za-z][^>]*>|[^<]+/gi;
-    const out = [];
-    let depth = 0, buffer = "";
-    const indent = () => "  ".repeat(Math.max(0, depth));
-    const flush = () => {
-      const v = buffer.replace(/\s+/g, " ").trim();
-      if (v) out.push(indent() + v);
-      buffer = "";
-    };
-    let m;
-    while ((m = re.exec(text))) {
-      const tok = m[0];
-      if (tok.startsWith("<!--") || tok.startsWith("<![CDATA[") || tok.startsWith("<?") || /^<!DOCTYPE/i.test(tok)) {
-        flush(); out.push(indent() + tok.trim());
-        continue;
-      }
-      if (tok.startsWith("<")) {
-        const close = /^<\//.test(tok);
-        const nameMatch = tok.match(/^<\/?\s*([A-Za-z][\w:.-]*)/);
-        const lname = nameMatch ? nameMatch[1].toLowerCase().split(":").pop() : "";
-        const selfClose = /\/\s*>$/.test(tok);
-        if (close) {
-          flush(); depth = Math.max(0, depth - 1); out.push(indent() + tok.trim());
-        } else if (inline.has(lname) && !voidTags.has(lname)) {
-          buffer += tok;
-        } else if (voidTags.has(lname) || selfClose) {
-          flush(); out.push(indent() + tok.trim());
-        } else {
-          flush(); out.push(indent() + tok.trim());
-          depth++;
-        }
-      } else {
-        buffer += tok;
-      }
+    const indent = (d) => "  ".repeat(Math.max(0, d));
+    const escapeText = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const escapeAttr = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const localName = (el) => String(el.nodeName || "").toLowerCase().split(":").pop();
+    const attrsOf = (el) => Array.from(el.attributes || []).map((a) => " " + a.name + '="' + escapeAttr(a.value) + '"').join("");
+    const isInline = (node) => node.nodeType === 3 || node.nodeType === 4 || node.nodeType === 8 || (node.nodeType === 1 && inlineTags.has(localName(node)));
+    const hasBlockChild = (el) => Array.from(el.childNodes).some((n) => n.nodeType === 1 && !inlineTags.has(localName(n)));
+    function inlineNode(node) {
+      if (node.nodeType === 3) return escapeText((node.nodeValue || "").replace(/\s+/g, " "));
+      if (node.nodeType === 4) return "<![CDATA[" + (node.nodeValue || "") + "]]>";
+      if (node.nodeType === 8) return "<!--" + (node.nodeValue || "") + "-->";
+      if (node.nodeType !== 1) return "";
+      const tag = node.nodeName;
+      const attrs = attrsOf(node);
+      const ln = localName(node);
+      if (voidTags.has(ln) || (isXml && !node.childNodes.length)) return "<" + tag + attrs + " />";
+      const inner = Array.from(node.childNodes).map(inlineNode).join("");
+      return "<" + tag + attrs + ">" + inner + "</" + tag + ">";
     }
-    flush();
-    return { ok: true, text: out.join("\n") + (text.endsWith("\n") ? "\n" : "") };
+    function inlineContent(el) {
+      return Array.from(el.childNodes).map(inlineNode).join("").replace(/^\s+|\s+$/g, "");
+    }
+    function serialize(el, depth) {
+      const pad = indent(depth);
+      const tag = el.nodeName;
+      const attrs = attrsOf(el);
+      const ln = localName(el);
+      if (voidTags.has(ln) || (isXml && !el.childNodes.length)) return pad + "<" + tag + attrs + " />";
+      if (!hasBlockChild(el)) return pad + "<" + tag + attrs + ">" + inlineContent(el) + "</" + tag + ">";
+      const lines = [];
+      let inlineBuffer = "";
+      const flushInline = () => {
+        const v = inlineBuffer.replace(/\s+/g, " ").trim();
+        if (v) lines.push(indent(depth + 1) + v);
+        inlineBuffer = "";
+      };
+      for (const child of Array.from(el.childNodes)) {
+        if (isInline(child)) {
+          inlineBuffer += inlineNode(child);
+        } else if (child.nodeType === 1) {
+          flushInline();
+          lines.push(serialize(child, depth + 1));
+        }
+      }
+      flushInline();
+      return pad + "<" + tag + attrs + ">\n" + lines.join("\n") + "\n" + pad + "</" + tag + ">";
+    }
+    let out = serialize(root, 0);
+    if (doctype) out = doctype + "\n" + out;
+    if (xmlDecl) out = xmlDecl + "\n" + out;
+    return { ok: true, text: out + "\n" };
   }
   function formatCssText(text) {
     let out = [], depth = 0, buf = "", i = 0, paren = 0;
@@ -2574,7 +2597,7 @@
     const text = cm.getValue();
     let result;
     if (ext === ".css") result = formatCssText(text);
-    else if (/\.(x?html?|htm|xml|opf|ncx|svg)$/i.test(ext)) result = formatMarkupText(text);
+    else if (/\.(x?html?|htm|xml|opf|ncx|svg)$/i.test(ext)) result = formatMarkupText(text, ext);
     else { status("当前文件类型暂不支持格式化：" + ext, true); return; }
     if (!result.ok) { status(result.error, true); return; }
     if (result.text === text) { status("当前文件已经是格式化状态"); return; }
@@ -2657,6 +2680,12 @@
       schedulePreviewSync();
     } finally { state.docLoading = false; }
   }
+  function prettyInnerBlocks(inner) {
+    let s = String(inner || "");
+    s = s.replace(/(<(?:p|h[1-6]|ul|ol|li|blockquote|div|section|article|figure|figcaption|table|thead|tbody|tr|td|th|pre|hr)\b[^>]*>)/gi, "\n$1");
+    s = s.replace(/(<\/(?:p|h[1-6]|ul|ol|li|blockquote|div|section|article|figure|figcaption|table|thead|tbody|tr|td|th|pre)>)/gi, "$1\n");
+    return s.replace(/\n[ \t]*\n/g, "\n").replace(/^\n+|\n+$/g, "");
+  }
   function flushDocEditor(syncSource) {
     if (!state.docMode || state.docLoading || !state.docChapter) return;
     const editor = $("docEditor");
@@ -2667,7 +2696,7 @@
     }
     for (const el of Array.from(clone.querySelectorAll("[contenteditable]"))) el.removeAttribute("contenteditable");
     docClean(clone);
-    let inner = clone.innerHTML;
+    let inner = prettyInnerBlocks(clone.innerHTML);
     // XHTML 要求 void 元素闭合
     inner = inner.replace(/<(br|hr|img|input|meta|link)\b([^>]*?)\s*\/?>/gi, (m, tag, attrs) => "<" + tag + attrs.replace(/\s*\/\s*$/, "").trimEnd() + " />");
     const text = state.docBefore + inner + state.docAfter;
