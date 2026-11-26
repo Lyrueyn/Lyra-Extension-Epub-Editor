@@ -563,8 +563,23 @@
     const total = Math.max(1, Math.ceil((content.scrollWidth + gap) / (pageW + gap)));
     state.paged = { doc, content, total, page: 0, pageW, pageH, gap };
     goPreviewPage(0);
-    // 预览内点击只用于选中文字/定位，不再通过点击左右区域翻页。
-    // 翻页统一用分页按钮、Alt+←/→，避免选中文字或点击空白时误翻页。
+    // 点击左右区域翻页；拖选文字、点击文字后不翻页
+    let downX = 0, downY = 0, downAt = 0, hadSelection = false;
+    doc.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      downX = event.clientX; downY = event.clientY; downAt = Date.now();
+      const sel = doc.getSelection();
+      hadSelection = !!(sel && !sel.isCollapsed && sel.toString().trim());
+    }, true);
+    doc.addEventListener("click", (event) => {
+      if (event.target.closest("a,button,input,select,textarea")) return;
+      if (hadSelection) { hadSelection = false; return; }
+      const sel = doc.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      const moved = Math.abs(event.clientX - downX) + Math.abs(event.clientY - downY);
+      if (moved > 6 || Date.now() - downAt > 900) return;
+      turnPreviewPage(event.clientX < doc.documentElement.clientWidth / 2 ? -1 : 1);
+    }, true);
   }
   function goPreviewPage(n) {
     const p = state.paged; if (!p) return;
@@ -739,6 +754,12 @@
   }
   function syncPreviewToCursor() {
     if (!state.zip || !state.current || state.docMode || !isHtmlFile(state.current) || state.previewKind !== "html") return;
+    // 源码里的纯空行只是排版空白，预览里没有一一对应的位置；
+    // 强行映射会把预览跳到开头/末尾，所以空行不参与对照同步。
+    try {
+      const line = cm.getLine(cm.getCursor().line) || "";
+      if (!line.trim()) return;
+    } catch { }
     const map = sourcePlainMap(cm.getValue());
     syncPreviewToPlain(sourceToPlain(map, cm.indexFromPos(cm.getCursor())));
   }
